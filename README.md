@@ -265,7 +265,7 @@ The salt value is also automatically filled in if left empty and it needs to be 
 ~ go test -bench=Benchmark -benchtime=5s
 goos: darwin
 goarch: amd64
-pkg: github.com/redkenrok/go-nutt
+pkg: github.com/redkenrok/go-nnut
 cpu: Intel(R) Core(TM) i5-1038NG7 CPU @ 2.00GHz
 BenchmarkGet-8                       	 3067785	      1954 ns/op
 BenchmarkBatchGet-8                  	 4265569	      1375 ns/op

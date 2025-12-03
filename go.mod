@@ -1,4 +1,4 @@
-module github.com/redkenrok/go-nutt
+module github.com/redkenrok/go-nnut
 
 go 1.21
 
