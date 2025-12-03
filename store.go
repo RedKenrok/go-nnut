@@ -12,6 +12,7 @@ type Store[T any] struct {
 	bucket      []byte
 	keyField    int            // index of the field tagged with nnut:"key"
 	indexFields map[string]int // index name -> field index
+	fieldMap    map[string]int // field name -> field index
 }
 
 // NewStore creates a new store for type T with the given bucket name
@@ -24,8 +25,10 @@ func NewStore[T any](db *DB, bucketName string) (*Store[T], error) {
 	}
 	keyField := -1
 	indexFields := make(map[string]int)
+	fieldMap := make(map[string]int)
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
+		fieldMap[field.Name] = i
 		tag := field.Tag.Get("nnut")
 		if tag == "key" {
 			if field.Type.Kind() != reflect.String {
@@ -48,6 +51,7 @@ func NewStore[T any](db *DB, bucketName string) (*Store[T], error) {
 		bucket:      []byte(bucketName),
 		keyField:    keyField,
 		indexFields: indexFields,
+		fieldMap:    fieldMap,
 	}, nil
 }
 

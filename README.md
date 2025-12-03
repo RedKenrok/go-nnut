@@ -262,19 +262,29 @@ The salt value is also automatically filled in if left empty and it needs to be 
 ## Benchmarks
 
 ```
-~ go test -bench=. -benchtime=2s
+~ go test -bench=Benchmark -benchtime=5s
 goos: darwin
 goarch: amd64
 pkg: github.com/redkenrok/go-nutt
 cpu: Intel(R) Core(TM) i5-1038NG7 CPU @ 2.00GHz
-BenchmarkGet-8                       	 1261446	      1895 ns/op
-BenchmarkBatchGet-8                  	 1628491	      1355 ns/op
-BenchmarkQuery-8                     	     297	   7925576 ns/op
-BenchmarkQueryMultipleConditions-8   	     291	   7977558 ns/op
-BenchmarkQuerySorting-8              	    1844	   1145258 ns/op
-BenchmarkQueryLimitOffset-8          	     308	   7970120 ns/op
-BenchmarkPut-8                       	   42469	     55299 ns/op
-BenchmarkBatchPut-8                  	   56373	     43154 ns/op
-BenchmarkDelete-8                    	   47172	     48139 ns/op
-BenchmarkBatchDelete-8               	   66712	     36394 ns/op
+BenchmarkGet-8                       	 3067785	      1954 ns/op
+BenchmarkBatchGet-8                  	 4265569	      1375 ns/op
+BenchmarkPut-8                       	   94162	     55299 ns/op
+BenchmarkBatchPut-8                  	  127052	     43717 ns/op
+BenchmarkDelete-8                    	  121840	     46630 ns/op
+BenchmarkBatchDelete-8               	  138255	     36178 ns/op
+BenchmarkQuery-8                     	    3423	   1549528 ns/op
+BenchmarkQueryMultipleConditions-8   	    2991	   1937208 ns/op
+BenchmarkQuerySorting-8              	   45759	    130233 ns/op
+BenchmarkQueryLimitOffset-8          	    3871	   1463407 ns/op
+BenchmarkQueryCount-8                	     828	   7063835 ns/op
+BenchmarkQueryCountIndex-8           	   47097	    126314 ns/op
+BenchmarkQueryNoConditions-8         	   50612	    118678 ns/op
+BenchmarkQueryNonIndexedField-8      	   29530	    218127 ns/op
+BenchmarkQueryComplexOperators-8     	   10086	    589241 ns/op
+BenchmarkQueryLargeLimit-8           	     700	   8208229 ns/op
+BenchmarkQueryOffsetOnly-8           	     649	   8119022 ns/op
+BenchmarkQuerySortingAscending-8     	   46963	    125583 ns/op
+BenchmarkQueryCountNoConditions-8    	   42849	    136400 ns/op
+BenchmarkQueryCountNonIndexed-8      	     837	   7108182 ns/op
 ```

@@ -16,6 +16,12 @@ var bufferPool = sync.Pool{
 	},
 }
 
+var mapPool = sync.Pool{
+	New: func() interface{} {
+		return make(map[string]bool)
+	},
+}
+
 type Operator int
 
 const (
@@ -49,6 +55,11 @@ type Query struct {
 	Conditions []Condition
 }
 
+type condWithSize struct {
+	cond Condition
+	size int
+}
+
 // Query queries for records matching the conditions
 func (s *Store[T]) Query(query *Query) ([]T, error) {
 	var results []T
@@ -65,10 +76,10 @@ func (s *Store[T]) Query(query *Query) ([]T, error) {
 			candidateKeys = s.getCandidateKeysTx(tx, query.Conditions, maxKeys)
 		} else if query.Index != "" {
 			// No conditions, but index for sorting, iterate index
-			candidateKeys = s.getKeysFromIndexTx(tx, query.Index, query.Sort)
+			candidateKeys = s.getKeysFromIndexTx(tx, query.Index, query.Sort, maxKeys)
 		} else {
 			// No conditions, no index, get all keys
-			candidateKeys = s.getAllKeysTx(tx)
+			candidateKeys = s.getAllKeysTx(tx, maxKeys)
 		}
 
 		// Apply offset and limit to keys
@@ -125,11 +136,13 @@ func (s *Store[T]) QueryCount(query *Query) (int, error) {
 		if len(query.Conditions) > 0 {
 			candidateKeys = s.getCandidateKeysTx(tx, query.Conditions, 0)
 		} else if query.Index != "" {
-			// No conditions, but index, get all from index
-			candidateKeys = s.getKeysFromIndexTx(tx, query.Index, query.Sort)
+			// No conditions, but index, count from index
+			count = s.countKeysFromIndexTx(tx, query.Index)
+			return nil
 		} else {
-			// No conditions, no index, get all keys
-			candidateKeys = s.getAllKeysTx(tx)
+			// No conditions, no index, count all keys
+			count = s.countAllKeysTx(tx)
+			return nil
 		}
 		count = len(candidateKeys)
 		return nil
@@ -140,7 +153,7 @@ func (s *Store[T]) QueryCount(query *Query) (int, error) {
 // getCandidateKeysTx returns keys that match all conditions using the provided tx
 func (s *Store[T]) getCandidateKeysTx(tx *bbolt.Tx, conditions []Condition, maxKeys int) []string {
 	if len(conditions) == 0 {
-		return s.getAllKeysTx(tx)
+		return s.getAllKeysTx(tx, maxKeys)
 	}
 
 	// Separate indexed and non-indexed conditions
@@ -158,25 +171,42 @@ func (s *Store[T]) getCandidateKeysTx(tx *bbolt.Tx, conditions []Condition, maxK
 		}
 	}
 
-	// Get keys from non-indexed conditions via single scan
-	var nonIndexedKeys []string
-	if len(nonIndexedConds) > 0 {
-		nonIndexedKeys = s.scanForConditionsTx(tx, nonIndexedConds)
-	}
-
-	// Get key sets from indexed conditions
-	var indexedKeySets [][]string
-	for _, cond := range indexedConds {
+	// Get key sets from indexed conditions, starting with the shortest
+	var indexedKeys []string
+	if len(indexedConds) > 0 {
+		var condSizes []condWithSize
+		for _, cond := range indexedConds {
+			size := s.countKeysForConditionTx(tx, cond, maxKeys)
+			condSizes = append(condSizes, condWithSize{cond, size})
+		}
+		// Sort by size ascending
+		sort.Slice(condSizes, func(i, j int) bool {
+			return condSizes[i].size < condSizes[j].size
+		})
+		// Primary is the smallest
+		primaryCond := condSizes[0].cond
 		keysMax := 0
 		if len(indexedConds) == 1 && len(nonIndexedConds) == 0 {
 			keysMax = maxKeys
 		}
-		keys := s.getKeysForConditionTx(tx, cond, keysMax)
-		indexedKeySets = append(indexedKeySets, keys)
+		indexedKeys = s.getKeysForConditionTx(tx, primaryCond, keysMax)
+		// Intersect others into primary
+		for i := 1; i < len(condSizes); i++ {
+			otherKeys := s.getKeysForConditionTx(tx, condSizes[i].cond, 0)
+			indexedKeys = intersectSlices(indexedKeys, otherKeys)
+		}
 	}
 
-	// Intersect indexed key sets
-	indexedKeys := intersectKeySlices(indexedKeySets)
+	// Get keys from non-indexed conditions via single scan
+	var nonIndexedKeys []string
+	if len(nonIndexedConds) > 0 {
+		// If we have indexed keys, scan only those; otherwise scan all
+		var candidates []string
+		if len(indexedConds) > 0 {
+			candidates = indexedKeys
+		}
+		nonIndexedKeys = s.scanForConditionsTx(tx, nonIndexedConds, candidates, maxKeys)
+	}
 
 	// Intersect with non-indexed
 	if len(nonIndexedConds) == 0 {
@@ -306,25 +336,114 @@ func (s *Store[T]) getKeysForConditionTx(tx *bbolt.Tx, cond Condition, maxKeys i
 	return keys
 }
 
+// countKeysForConditionTx returns the count of keys matching the condition
+func (s *Store[T]) countKeysForConditionTx(tx *bbolt.Tx, cond Condition, maxKeys int) int {
+	var count int
+	_, indexed := s.indexFields[cond.Field]
+	valStr, isString := cond.Value.(string)
+	if !indexed || !isString {
+		return 0
+	}
+
+	idxBucketName := string(s.bucket) + "_index_" + cond.Field
+	idxB := tx.Bucket([]byte(idxBucketName))
+	if idxB == nil {
+		return 0
+	}
+	c := idxB.Cursor()
+	var k []byte
+	switch cond.Operator {
+	case Equals:
+		prefix := valStr + "\x00"
+		for k, _ = c.Seek([]byte(prefix)); k != nil && bytes.HasPrefix(k, []byte(prefix)); k, _ = c.Next() {
+			count++
+			if maxKeys > 0 && count >= maxKeys {
+				break
+			}
+		}
+	case GreaterThan:
+		k, _ = c.Seek([]byte(valStr + "\x00"))
+		// Skip equals
+		for k != nil && bytes.HasPrefix(k, []byte(valStr+"\x00")) {
+			k, _ = c.Next()
+		}
+		// Now count greater
+		for k != nil {
+			count++
+			if maxKeys > 0 && count >= maxKeys {
+				break
+			}
+			parts := bytes.SplitN(k, []byte("\x00"), 2)
+			if len(parts) == 2 {
+				val := string(parts[0])
+				if val <= valStr {
+					break
+				}
+			}
+			k, _ = c.Next()
+		}
+	case GreaterThanOrEqual:
+		for k, _ = c.Seek([]byte(valStr + "\x00")); k != nil; k, _ = c.Next() {
+			count++
+			if maxKeys > 0 && count >= maxKeys {
+				break
+			}
+			parts := bytes.SplitN(k, []byte("\x00"), 2)
+			if len(parts) == 2 {
+				val := string(parts[0])
+				if val < valStr {
+					break
+				}
+			}
+		}
+	case LessThan:
+		for k, _ = c.First(); k != nil; k, _ = c.Next() {
+			count++
+			if maxKeys > 0 && count >= maxKeys {
+				break
+			}
+			parts := bytes.SplitN(k, []byte("\x00"), 2)
+			if len(parts) == 2 {
+				val := string(parts[0])
+				if val >= valStr {
+					break
+				}
+			}
+		}
+	case LessThanOrEqual:
+		for k, _ = c.First(); k != nil; k, _ = c.Next() {
+			count++
+			if maxKeys > 0 && count >= maxKeys {
+				break
+			}
+			parts := bytes.SplitN(k, []byte("\x00"), 2)
+			if len(parts) == 2 {
+				val := string(parts[0])
+				if val > valStr {
+					break
+				}
+			}
+		}
+	}
+	return count
+}
+
 // matchesCondition checks if the item matches the condition
 func (s *Store[T]) matchesCondition(item T, cond Condition) bool {
 	v := reflect.ValueOf(item)
-	typ := v.Type()
-	for i := 0; i < typ.NumField(); i++ {
-		if typ.Field(i).Name == cond.Field {
-			fieldVal := v.Field(i)
-			switch cond.Operator {
-			case Equals:
-				return reflect.DeepEqual(fieldVal.Interface(), cond.Value)
-			case GreaterThan:
-				return compare(fieldVal.Interface(), cond.Value) > 0
-			case LessThan:
-				return compare(fieldVal.Interface(), cond.Value) < 0
-			case GreaterThanOrEqual:
-				return compare(fieldVal.Interface(), cond.Value) >= 0
-			case LessThanOrEqual:
-				return compare(fieldVal.Interface(), cond.Value) <= 0
-			}
+	if idx, ok := s.fieldMap[cond.Field]; ok {
+		fieldVal := v.Field(idx)
+		switch cond.Operator {
+		case Equals:
+			return reflect.DeepEqual(fieldVal.Interface(), cond.Value)
+		case GreaterThan:
+			return compare(fieldVal.Interface(), cond.Value) > 0
+		case LessThan:
+			return compare(fieldVal.Interface(), cond.Value) < 0
+		case GreaterThanOrEqual:
+			return compare(fieldVal.Interface(), cond.Value) >= 0
+		case LessThanOrEqual:
+			return compare(fieldVal.Interface(), cond.Value) <= 0
 		}
 	}
 	return false
@@ -355,8 +474,8 @@ func compare(a, b interface{}) int {
 	return 0 // not comparable, treat as equal
 }
 
-// getAllKeysTx returns all keys in the bucket, sorted
-func (s *Store[T]) getAllKeysTx(tx *bbolt.Tx) []string {
+// getAllKeysTx returns all keys in the bucket, sorted, up to maxKeys if >0
+func (s *Store[T]) getAllKeysTx(tx *bbolt.Tx, maxKeys int) []string {
 	var keys []string
 	b := tx.Bucket(s.bucket)
 	if b == nil {
@@ -364,13 +483,30 @@ func (s *Store[T]) getAllKeysTx(tx *bbolt.Tx) []string {
 	}
 	c := b.Cursor()
 	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		if maxKeys > 0 && len(keys) >= maxKeys {
+			break
+		}
 		keys = append(keys, string(k))
 	}
 	return keys
 }
 
+// countAllKeysTx returns the count of all keys in the bucket
+func (s *Store[T]) countAllKeysTx(tx *bbolt.Tx) int {
+	count := 0
+	b := tx.Bucket(s.bucket)
+	if b == nil {
+		return count
+	}
+	c := b.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		count++
+	}
+	return count
+}
+
 // getKeysFromIndexTx returns all keys sorted by the index
-func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sorting) []string {
+func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sorting, maxKeys int) []string {
 	var keys []string
 	idxBucketName := string(s.bucket) + "_index_" + index
 	idxB := tx.Bucket([]byte(idxBucketName))
@@ -380,7 +516,7 @@ func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sortin
 	c := idxB.Cursor()
 	var k []byte
 	if sorting == Descending {
-		for k, _ = c.Last(); k != nil; k, _ = c.Prev() {
+		for k, _ = c.Last(); k != nil && (maxKeys == 0 || len(keys) < maxKeys); k, _ = c.Prev() {
 			parts := bytes.SplitN(k, []byte("\x00"), 2)
 			if len(parts) == 2 {
 				key := string(parts[1])
@@ -388,7 +524,7 @@ func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sortin
 			}
 		}
 	} else {
-		for k, _ = c.First(); k != nil; k, _ = c.Next() {
+		for k, _ = c.First(); k != nil && (maxKeys == 0 || len(keys) < maxKeys); k, _ = c.Next() {
 			parts := bytes.SplitN(k, []byte("\x00"), 2)
 			if len(parts) == 2 {
 				key := string(parts[1])
@@ -399,8 +535,25 @@ func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sortin
 	return keys
 }
 
-// scanForConditionsTx scans all records and returns keys matching all conditions
-func (s *Store[T]) scanForConditionsTx(tx *bbolt.Tx, conditions []Condition) []string {
+// countKeysFromIndexTx returns the count of keys in the index
+func (s *Store[T]) countKeysFromIndexTx(tx *bbolt.Tx, index string) int {
+	count := 0
+	idxBucketName := string(s.bucket) + "_index_" + index
+	idxB := tx.Bucket([]byte(idxBucketName))
+	if idxB == nil {
+		return count
+	}
+	c := idxB.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		count++
+	}
+	return count
+}
+
+// scanForConditionsTx scans records and returns keys matching all conditions
+// If candidates is not nil, only scans those keys; otherwise scans all.
+// Limits to maxKeys if >0.
+func (s *Store[T]) scanForConditionsTx(tx *bbolt.Tx, conditions []Condition, candidates []string, maxKeys int) []string {
 	var keys []string
 	b := tx.Bucket(s.bucket)
 	if b == nil {
@@ -408,63 +561,74 @@ func (s *Store[T]) scanForConditionsTx(tx *bbolt.Tx, conditions []Condition) []s
 	}
 	dec := msgpack.GetDecoder()
 	defer msgpack.PutDecoder(dec)
-	c := b.Cursor()
-	for k, v := c.First(); k != nil; k, v = c.Next() {
-		var item T
-		dec.Reset(bytes.NewReader(v))
-		err := dec.Decode(&item)
-		if err != nil {
-			continue
-		}
-		matches := true
-		for _, cond := range conditions {
-			if !s.matchesCondition(item, cond) {
-				matches = false
-				break
+	if candidates != nil {
+		// Scan only candidate keys
+		for _, key := range candidates {
+			data := b.Get([]byte(key))
+			if data == nil {
+				continue
+			}
+			var item T
+			dec.Reset(bytes.NewReader(data))
+			err := dec.Decode(&item)
+			if err != nil {
+				continue
+			}
+			matches := true
+			for _, cond := range conditions {
+				if !s.matchesCondition(item, cond) {
+					matches = false
+					break
+				}
+			}
+			if matches {
+				keys = append(keys, key)
+				if maxKeys > 0 && len(keys) >= maxKeys {
+					break
+				}
 			}
 		}
-		if matches {
-			keys = append(keys, string(k))
+	} else {
+		// Scan all records
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var item T
+			dec.Reset(bytes.NewReader(v))
+			err := dec.Decode(&item)
+			if err != nil {
+				continue
+			}
+			matches := true
+			for _, cond := range conditions {
+				if !s.matchesCondition(item, cond) {
+					matches = false
+					break
+				}
+			}
+			if matches {
+				keys = append(keys, string(k))
+				if maxKeys > 0 && len(keys) >= maxKeys {
+					break
+				}
+			}
 		}
 	}
 	return keys
 }
 
-// intersectKeySlices intersects multiple key slices
-func intersectKeySlices(slices [][]string) []string {
-	if len(slices) == 0 {
-		return []string{}
+// intersectSlices intersects two key slices, returning keys in base that are also in other
+func intersectSlices(base, other []string) []string {
+	baseMap := make(map[string]bool, len(base))
+	for _, k := range base {
+		baseMap[k] = true
 	}
-	if len(slices) == 1 {
-		return slices[0]
-	}
-	// Use maps for intersection
-	sets := make([]map[string]bool, len(slices))
-	for i, slice := range slices {
-		sets[i] = make(map[string]bool, len(slice))
-		for _, k := range slice {
-			sets[i][k] = true
+	var result []string
+	for _, k := range other {
+		if baseMap[k] {
+			result = append(result, k)
 		}
 	}
-	result := make(map[string]bool)
-	for key := range sets[0] {
-		inAll := true
-		for _, set := range sets[1:] {
-			if !set[key] {
-				inAll = false
-				break
-			}
-		}
-		if inAll {
-			result[key] = true
-		}
-	}
-	var res []string
-	for k := range result {
-		res = append(res, k)
-	}
-	sort.Strings(res)
-	return res
+	return result
 }
 
 // sortResults sorts the results by the index field
