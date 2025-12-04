@@ -45,12 +45,12 @@ func (s *Store[T]) Delete(key string) error {
 	err = walEncoder.Encode(operation)
 	if err != nil {
 		s.database.walMutex.Unlock()
-		return err
+		return WrappedError{Op: "encode WAL", Bucket: string(s.bucket), Key: key, Err: err}
 	}
 	_, err = s.database.walFile.Write(walBuffer.Bytes())
 	s.database.walMutex.Unlock()
 	if err != nil {
-		return err
+		return FileSystemError{Path: s.database.config.WALPath, Operation: "write", Err: err}
 	}
 
 	s.database.operationsBufferMutex.Lock()
@@ -69,7 +69,7 @@ func (s *Store[T]) DeleteBatch(keys []string) error {
 	// Fetch current values to handle index updates in batch
 	oldValues, err := s.GetBatch(keys)
 	if err != nil {
-		return err
+		return WrappedError{Op: "get_batch", Bucket: string(s.bucket), Err: err}
 	}
 
 	// Build operations for each key to be deleted
@@ -112,14 +112,20 @@ func (s *Store[T]) DeleteBatch(keys []string) error {
 	for _, operation := range operations {
 		err = walEncoder.Encode(operation)
 		if err != nil {
-			return err
+			return WrappedError{Op: "encode WAL batch", Bucket: string(s.bucket), Err: err}
 		}
 	}
 	s.database.walMutex.Lock()
 	_, err = s.database.walFile.Write(walBuffer.Bytes())
 	s.database.walMutex.Unlock()
 	if err != nil {
-		return err
+		return FileSystemError{Path: s.database.config.WALPath, Operation: "write_batch", Err: err}
+	}
+	s.database.walMutex.Lock()
+	_, err = s.database.walFile.Write(walBuffer.Bytes())
+	s.database.walMutex.Unlock()
+	if err != nil {
+		return WrappedError{Op: "write WAL batch", Bucket: string(s.bucket), Err: err}
 	}
 
 	// Queue operations for eventual flush to disk

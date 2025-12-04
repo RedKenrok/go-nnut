@@ -2,6 +2,7 @@ package nnut
 
 import (
 	"io"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -56,14 +57,35 @@ func Open(path string) (*DB, error) {
 	return OpenWithConfig(path, config)
 }
 
+// validateConfig validates the configuration parameters
+func validateConfig(config *Config) error {
+	if config == nil {
+		return InvalidConfigError{Field: "config", Value: nil, Reason: "cannot be nil"}
+	}
+	if config.WALFlushSize <= 0 {
+		return InvalidConfigError{Field: "WALFlushSize", Value: config.WALFlushSize, Reason: "must be positive"}
+	}
+	if config.WALFlushInterval <= 0 {
+		return InvalidConfigError{Field: "WALFlushInterval", Value: config.WALFlushInterval, Reason: "must be positive"}
+	}
+	if config.WALPath == "" {
+		return InvalidConfigError{Field: "WALPath", Value: config.WALPath, Reason: "cannot be empty"}
+	}
+	return nil
+}
+
 // OpenWithConfig opens a database with config
 func OpenWithConfig(path string, config *Config) (*DB, error) {
-	if config.WALPath == "" {
+	if config != nil && config.WALPath == "" {
 		config.WALPath = path + ".wal"
+	}
+
+	if err := validateConfig(config); err != nil {
+		return nil, err
 	}
 	database, err := bbolt.Open(path, 0600, nil)
 	if err != nil {
-		return nil, err
+		return nil, FileSystemError{Path: path, Operation: "open", Err: err}
 	}
 	databaseInstance := &DB{
 		DB:               database,
@@ -84,7 +106,7 @@ func OpenWithConfig(path string, config *Config) (*DB, error) {
 	databaseInstance.walFile, err = os.OpenFile(config.WALPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		database.Close()
-		return nil, err
+		return nil, FileSystemError{Path: config.WALPath, Operation: "create", Err: err}
 	}
 
 	databaseInstance.closeWaitGroup.Add(1)
@@ -111,13 +133,14 @@ func (db *DB) replayWAL() error {
 			// No WAL, ok
 			return nil
 		}
-		return err
+		return FileSystemError{Path: db.config.WALPath, Operation: "open", Err: err}
 	}
 	defer file.Close()
 
 	decoder := msgpack.GetDecoder()
 	defer msgpack.PutDecoder(decoder)
 	decoder.Reset(file)
+	operationIndex := 0
 	for {
 		var operation operation
 		err := decoder.Decode(&operation)
@@ -127,24 +150,24 @@ func (db *DB) replayWAL() error {
 			}
 			// Corrupted WAL file cannot be trusted, discard to avoid applying invalid operations
 			os.Remove(db.config.WALPath)
-			return nil
+			return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
 		}
 
 		// Reapply operations to restore database state
 		err = db.Update(func(tx *bbolt.Tx) error {
 			b, err := tx.CreateBucketIfNotExists(operation.Bucket)
 			if err != nil {
-				return err
+				return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
 			}
 			if operation.IsPut {
 				err = b.Put([]byte(operation.Key), operation.Value)
 				if err != nil {
-					return err
+					return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
 				}
 			} else {
 				err = b.Delete([]byte(operation.Key))
 				if err != nil {
-					return err
+					return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
 				}
 			}
 
@@ -153,28 +176,29 @@ func (db *DB) replayWAL() error {
 				idxBucketName := string(operation.Bucket) + "_index_" + idxOp.IndexName
 				idxB, err := tx.CreateBucketIfNotExists([]byte(idxBucketName))
 				if err != nil {
-					return err
+					return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: IndexError{IndexName: idxOp.IndexName, Operation: "create_bucket", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}}
 				}
 				if idxOp.OldValue != "" {
 					oldKey := idxOp.OldValue + "\x00" + operation.Key
 					err = idxB.Delete([]byte(oldKey))
 					if err != nil {
-						return err
+						return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: IndexError{IndexName: idxOp.IndexName, Operation: "delete", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}}
 					}
 				}
 				if idxOp.NewValue != "" {
 					newKey := idxOp.NewValue + "\x00" + operation.Key
 					err = idxB.Put([]byte(newKey), []byte{})
 					if err != nil {
-						return err
+						return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: IndexError{IndexName: idxOp.IndexName, Operation: "put", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}}
 					}
 				}
 			}
 			return nil
 		})
 		if err != nil {
-			return err
+			return WrappedError{Op: "replay_wal", Err: err}
 		}
+		operationIndex++
 	}
 
 	// WAL is no longer needed after successful replay
@@ -232,20 +256,20 @@ func (db *DB) Flush() {
 				idxBucketName := string(operation.Bucket) + "_index_" + idxOp.IndexName
 				idxB, err := tx.CreateBucketIfNotExists([]byte(idxBucketName))
 				if err != nil {
-					return err
+					return IndexError{IndexName: idxOp.IndexName, Operation: "create_bucket", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}
 				}
 				if idxOp.OldValue != "" {
 					oldKey := idxOp.OldValue + "\x00" + operation.Key
 					err = idxB.Delete([]byte(oldKey))
 					if err != nil {
-						return err
+						return IndexError{IndexName: idxOp.IndexName, Operation: "delete", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}
 					}
 				}
 				if idxOp.NewValue != "" {
 					newKey := idxOp.NewValue + "\x00" + operation.Key
 					err = idxB.Put([]byte(newKey), []byte{})
 					if err != nil {
-						return err
+						return IndexError{IndexName: idxOp.IndexName, Operation: "put", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}
 					}
 				}
 			}
@@ -253,6 +277,7 @@ func (db *DB) Flush() {
 		return nil
 	})
 	if err != nil {
-		// Errors during flush are not critical as operations remain in buffer for retry
+		// Log flush errors for debugging, but don't fail the operation as operations remain in buffer for retry
+		log.Printf("Flush error: %v", FlushError{OperationCount: len(operations), Err: err})
 	}
 }

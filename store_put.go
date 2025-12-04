@@ -2,7 +2,6 @@ package nnut
 
 import (
 	"bytes"
-	"errors"
 	"reflect"
 
 	"github.com/vmihailenco/msgpack/v5"
@@ -14,7 +13,7 @@ func (s *Store[T]) Put(value T) error {
 	valueReflection := reflect.ValueOf(value)
 	key := valueReflection.Field(s.keyField).String()
 	if key == "" {
-		return errors.New("key field is empty")
+		return InvalidKeyError{Key: key}
 	}
 
 	// Fetch existing record to handle index changes
@@ -44,7 +43,7 @@ func (s *Store[T]) Put(value T) error {
 
 	data, err := msgpack.Marshal(value)
 	if err != nil {
-		return err
+		return WrappedError{Op: "marshal", Bucket: string(s.bucket), Key: key, Err: err}
 	}
 
 	operation := operation{
@@ -62,12 +61,12 @@ func (s *Store[T]) Put(value T) error {
 	err = walEncoder.Encode(operation)
 	if err != nil {
 		s.database.walMutex.Unlock()
-		return err
+		return WrappedError{Op: "encode WAL", Bucket: string(s.bucket), Key: key, Err: err}
 	}
 	_, err = s.database.walFile.Write(walBuffer.Bytes())
 	s.database.walMutex.Unlock()
 	if err != nil {
-		return err
+		return FileSystemError{Path: s.database.config.WALPath, Operation: "write", Err: err}
 	}
 
 	s.database.operationsBufferMutex.Lock()
@@ -90,7 +89,7 @@ func (s *Store[T]) PutBatch(values []T) error {
 		valueReflection := reflect.ValueOf(value)
 		key := valueReflection.Field(s.keyField).String()
 		if key == "" {
-			return errors.New("key field is empty")
+			return InvalidKeyError{Key: key}
 		}
 		keys[index] = key
 		keyToValue[key] = value
@@ -99,7 +98,7 @@ func (s *Store[T]) PutBatch(values []T) error {
 	// Retrieve existing records for index updates
 	oldValues, err := s.GetBatch(keys)
 	if err != nil {
-		return err
+		return WrappedError{Op: "get_batch", Bucket: string(s.bucket), Err: err}
 	}
 
 	// Build operations for each record
@@ -136,7 +135,7 @@ func (s *Store[T]) PutBatch(values []T) error {
 		encoder := msgpack.NewEncoder(buf)
 		err = encoder.Encode(value)
 		if err != nil {
-			return err
+			return WrappedError{Op: "encode", Bucket: string(s.bucket), Key: key, Err: err}
 		}
 		data := buf.Bytes()
 
@@ -156,14 +155,14 @@ func (s *Store[T]) PutBatch(values []T) error {
 	for _, operation := range operations {
 		err = walEncoder.Encode(operation)
 		if err != nil {
-			return err
+			return WrappedError{Op: "encode WAL batch", Bucket: string(s.bucket), Err: err}
 		}
 	}
 	s.database.walMutex.Lock()
 	_, err = s.database.walFile.Write(walBuffer.Bytes())
 	s.database.walMutex.Unlock()
 	if err != nil {
-		return err
+		return FileSystemError{Path: s.database.config.WALPath, Operation: "write_batch", Err: err}
 	}
 
 	// Queue operations for eventual flush

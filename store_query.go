@@ -55,6 +55,25 @@ type Query struct {
 	Conditions []Condition
 }
 
+// validateQuery validates query parameters
+func (s *Store[T]) validateQuery(query *Query) error {
+	if query == nil {
+		return InvalidQueryError{Field: "query", Value: nil, Reason: "cannot be nil"}
+	}
+	if query.Limit < 0 {
+		return InvalidQueryError{Field: "Limit", Value: query.Limit, Reason: "cannot be negative"}
+	}
+	if query.Offset < 0 {
+		return InvalidQueryError{Field: "Offset", Value: query.Offset, Reason: "cannot be negative"}
+	}
+	if query.Index != "" {
+		if _, exists := s.indexFields[query.Index]; !exists {
+			return InvalidQueryError{Field: "Index", Value: query.Index, Reason: "index field does not exist"}
+		}
+	}
+	return nil
+}
+
 type condWithSize struct {
 	cond Condition
 	size int
@@ -62,6 +81,10 @@ type condWithSize struct {
 
 // Query queries for records matching the conditions
 func (s *Store[T]) Query(query *Query) ([]T, error) {
+	if err := s.validateQuery(query); err != nil {
+		return nil, err
+	}
+
 	var results []T
 	err := s.database.View(func(tx *bbolt.Tx) error {
 		// Determine the maximum number of keys needed based on limit and offset
@@ -96,7 +119,7 @@ func (s *Store[T]) Query(query *Query) ([]T, error) {
 		// Retrieve the actual data for the selected keys
 		bucket := tx.Bucket(s.bucket)
 		if bucket == nil {
-			return nil
+			return BucketNotFoundError{Bucket: string(s.bucket)}
 		}
 		decoder := msgpack.GetDecoder()
 		defer msgpack.PutDecoder(decoder)
@@ -129,6 +152,10 @@ func (s *Store[T]) Query(query *Query) ([]T, error) {
 
 // QueryCount returns the number of records matching the query
 func (s *Store[T]) QueryCount(query *Query) (int, error) {
+	if err := s.validateQuery(query); err != nil {
+		return 0, err
+	}
+
 	var count int
 	err := s.database.View(func(tx *bbolt.Tx) error {
 		// Collect candidate keys from conditions
@@ -479,6 +506,7 @@ func (s *Store[T]) getAllKeysTx(tx *bbolt.Tx, maxKeys int) []string {
 	var keys []string
 	bucket := tx.Bucket(s.bucket)
 	if bucket == nil {
+		// Bucket not found, return empty
 		return keys
 	}
 	cursor := bucket.Cursor()
@@ -496,6 +524,7 @@ func (s *Store[T]) countAllKeysTx(tx *bbolt.Tx) int {
 	count := 0
 	bucket := tx.Bucket(s.bucket)
 	if bucket == nil {
+		// Bucket not found, return 0
 		return count
 	}
 	cursor := bucket.Cursor()
@@ -557,6 +586,7 @@ func (s *Store[T]) scanForConditionsTx(tx *bbolt.Tx, conditions []Condition, can
 	var keys []string
 	bucket := tx.Bucket(s.bucket)
 	if bucket == nil {
+		// Bucket not found, return empty
 		return keys
 	}
 	decoder := msgpack.GetDecoder()

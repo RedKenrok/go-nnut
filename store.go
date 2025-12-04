@@ -1,7 +1,6 @@
 package nnut
 
 import (
-	"errors"
 	"reflect"
 	"strings"
 )
@@ -21,7 +20,7 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 	var zeroValue T
 	typeOfStruct := reflect.TypeOf(zeroValue)
 	if typeOfStruct.Kind() != reflect.Struct {
-		return nil, errors.New("type must be a struct")
+		return nil, InvalidTypeError{Type: typeOfStruct.String()}
 	}
 	keyFieldIndex := -1
 	indexFields := make(map[string]int)
@@ -32,7 +31,7 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 		tagValue := field.Tag.Get("nnut")
 		if tagValue == "key" {
 			if field.Type.Kind() != reflect.String {
-				return nil, errors.New("key field must be string")
+				return nil, KeyFieldNotStringError{FieldName: field.Name}
 			}
 			keyFieldIndex = fieldIndex
 		} else if strings.HasPrefix(tagValue, "index:") {
@@ -44,7 +43,7 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 		}
 	}
 	if keyFieldIndex == -1 {
-		return nil, errors.New("no field tagged with nnut:\"key\"")
+		return nil, KeyFieldNotFoundError{}
 	}
 	return &Store[T]{
 		database:    database,
