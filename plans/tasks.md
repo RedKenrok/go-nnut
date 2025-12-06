@@ -1,27 +1,5 @@
 # Tasks
 
-## 1. Refactor query interface
-
-- Current state: Query functionality is only used for getting data.
-- Improvements:
-  - Rename `Query` to `GetQuery` and `QueryCount` to `CountQuery`.
-    - Update method names in `store_query.go` to `GetQuery` and `CountQuery` for clarity and consistency.
-    - Add deprecation notices or aliases for backward compatibility if needed.
-    - Update all internal calls and tests to use the new names.
-  - Add `Count` function for index length.
-    - Implement `Count(ctx context.Context, index string) (int, error)` on `Store[T]` that returns the number of unique values in the specified index.
-    - Validate that the index exists using `s.indexFields`.
-    - Use `countKeysFromIndexTx` internally to count entries in the index bucket.
-    - Handle cases where index is empty or doesn't exist.
-    - Add unit tests for various index scenarios.
-  - Add `DeleteQuery` function reusing query logic.
-    - Implement `DeleteQuery(ctx context.Context, query *Query) (int, error)` that deletes records matching the query conditions and returns the count of deleted records.
-    - Reuse candidate key gathering logic from `GetQuery` to identify keys to delete.
-    - Perform deletions in a single `Update` transaction for atomicity.
-    - Update indexes accordingly during deletion (similar to `Put` with old/new index operations).
-    - Ensure proper error handling and return partial success if some deletions fail.
-    - Add comprehensive tests including edge cases like deleting with conditions and indexes.
-
 ## 2. Code maintainability
 
 Add documentation with godoc examples.

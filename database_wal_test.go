@@ -10,66 +10,9 @@ import (
 	"time"
 )
 
-func TestWALFlushSize(t *testing.T) {
-	config := &Config{
-		WALFlushSize:     1000,      // large count to not trigger
-		WALFlushInterval: time.Hour, // long to not auto flush
-		MaxBufferBytes:   1000,      // size to allow 2 operations but not 3
-	}
-	db, err := OpenWithConfig("test.db", config)
-	if err != nil {
-		t.Fatalf("Failed to open DB: %v", err)
-	}
-	defer db.Close()
-	defer os.Remove("test.db")
-	defer os.Remove("test.db.wal")
-
-	store, err := NewStore[TestUser](db, "users")
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-
-	// Trigger flush by exceeding buffer size to verify WAL behavior
-	firstUser := TestUser{UUID: "key1", Name: "John", Email: "john@example.com"}
-	err = store.Put(context.Background(), firstUser)
-	if err != nil {
-		t.Fatalf("Failed to put: %v", err)
-	}
-	secondUser := TestUser{UUID: "key2", Name: "Jane", Email: "jane@example.com"}
-	err = store.Put(context.Background(), secondUser)
-	if err != nil {
-		t.Fatalf("Failed to put: %v", err)
-	}
-	// Buffer reaches capacity, triggering automatic flush
-	time.Sleep(100 * time.Millisecond) // wait for flush
-
-	retrieved, err := store.Get(context.Background(), "key1")
-	if err != nil {
-		t.Fatalf("Failed to get key1: %v", err)
-	}
-	if retrieved.Name != firstUser.Name {
-		t.Fatal("key1 not flushed")
-	}
-
-	thirdUser := TestUser{UUID: "key3", Name: "Bob", Email: "bob@example.com"}
-	err = store.Put(context.Background(), thirdUser)
-	if err != nil {
-		t.Fatalf("Failed to put: %v", err)
-	}
-	// With buffer-aware reading, key3 should be retrievable from buffer
-	retrieved3, err := store.Get(context.Background(), "key3")
-	if err != nil {
-		t.Fatalf("Failed to get key3: %v", err)
-	}
-	if retrieved3.Name != thirdUser.Name {
-		t.Fatal("key3 not retrievable from buffer")
-	}
-}
-
 func TestWALFlushInterval(t *testing.T) {
 	config := &Config{
-		WALFlushSize:     100,
-		WALFlushInterval: 50 * time.Millisecond,
+		FlushInterval: 50 * time.Millisecond,
 	}
 	db, err := OpenWithConfig("test.db", config)
 	if err != nil {
@@ -104,8 +47,7 @@ func TestWALFlushInterval(t *testing.T) {
 
 func TestSizeBasedFlush(t *testing.T) {
 	config := &Config{
-		WALFlushSize:     1000,      // Large count to not trigger
-		WALFlushInterval: time.Hour, // Long to not trigger
+		FlushInterval: time.Hour, // Long to not trigger
 		MaxBufferBytes:   1000,      // Small size to trigger flush
 	}
 	db, err := OpenWithConfig("test.db", config)
@@ -152,8 +94,7 @@ func TestWALRecoveryAfterSimulatedCrash(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		WALFlushSize:     1000, // Delay flush
-		WALFlushInterval: time.Hour,
+		FlushInterval: time.Hour,
 		MaxBufferBytes:   1000000, // Large buffer to prevent flush during puts
 	}
 	db, err := OpenWithConfig(dbPath, config)
@@ -206,8 +147,7 @@ func TestWALCorruptionHandling(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		WALFlushSize:     1,
-		WALFlushInterval: time.Hour,
+		FlushInterval: time.Hour,
 	}
 
 	// Create DB and add data
@@ -261,8 +201,7 @@ func TestWALChecksumVerification(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		WALFlushSize:     1024,
-		WALFlushInterval: time.Hour,
+		FlushInterval: time.Hour,
 		MaxBufferBytes:   100000,
 	}
 	db, err := OpenWithConfig(dbPath, config)
@@ -327,8 +266,7 @@ func TestWALTruncation(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		WALFlushSize:     1024,
-		WALFlushInterval: time.Hour, // Prevent auto-flush
+		FlushInterval: time.Hour, // Prevent auto-flush
 		MaxBufferBytes:   100000,    // Large buffer to prevent auto-flush
 	}
 	db, err := OpenWithConfig(dbPath, config)

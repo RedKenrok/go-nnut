@@ -16,8 +16,7 @@ import (
 
 // Config holds configuration options
 type Config struct {
-	WALFlushSize     int
-	WALFlushInterval time.Duration
+	FlushInterval time.Duration
 	WALPath          string
 	MaxBufferBytes   int
 	FlushChannelSize int // Size of the flush channel buffer (default 10)
@@ -63,8 +62,7 @@ type walEntry struct {
 // Open opens a database with default config
 func Open(path string) (*DB, error) {
 	config := &Config{
-		WALFlushSize:     1024,
-		WALFlushInterval: time.Minute * 15,
+		FlushInterval: time.Minute * 15,
 		WALPath:          path + ".wal",
 		MaxBufferBytes:   10 * 1024 * 1024, // 10MB
 		FlushChannelSize: 10,
@@ -77,11 +75,8 @@ func validateConfig(config *Config) error {
 	if config == nil {
 		return InvalidConfigError{Field: "config", Value: nil, Reason: "cannot be nil"}
 	}
-	if config.WALFlushSize <= 0 {
-		return InvalidConfigError{Field: "WALFlushSize", Value: config.WALFlushSize, Reason: "must be positive"}
-	}
-	if config.WALFlushInterval <= 0 {
-		return InvalidConfigError{Field: "WALFlushInterval", Value: config.WALFlushInterval, Reason: "must be positive"}
+	if config.FlushInterval <= 0 {
+		return InvalidConfigError{Field: "FlushInterval", Value: config.FlushInterval, Reason: "must be positive"}
 	}
 	if config.WALPath == "" {
 		return InvalidConfigError{Field: "WALPath", Value: config.WALPath, Reason: "cannot be empty"}
@@ -158,6 +153,19 @@ func (db *DB) getLatestBufferedOperation(bucket []byte, key string) (operation, 
 	defer db.operationsBufferMutex.Unlock()
 	op, exists := db.operationsBuffer[bufferKey(bucket, key)]
 	return op, exists
+}
+
+// getBufferedOperationsForBucket returns all buffered operations for a specific bucket
+func (db *DB) getBufferedOperationsForBucket(bucket []byte) []operation {
+	db.operationsBufferMutex.Lock()
+	defer db.operationsBufferMutex.Unlock()
+	var ops []operation
+	for _, op := range db.operationsBuffer {
+		if bytes.Equal(op.Bucket, bucket) {
+			ops = append(ops, op)
+		}
+	}
+	return ops
 }
 
 func (db *DB) replayWAL() error {
@@ -263,7 +271,7 @@ func (db *DB) replayWAL() error {
 
 func (db *DB) flushWAL() {
 	defer db.closeWaitGroup.Done()
-	ticker := time.NewTicker(db.config.WALFlushInterval)
+	ticker := time.NewTicker(db.config.FlushInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -271,7 +279,7 @@ func (db *DB) flushWAL() {
 			db.Flush()
 		case <-db.flushChannel:
 			db.Flush()
-			ticker.Reset(db.config.WALFlushInterval)
+			ticker.Reset(db.config.FlushInterval)
 		case <-db.closeChannel:
 			return
 		}

@@ -63,6 +63,40 @@ func TestSetupBenchmarkDB(t *testing.T) {
 	// Leave the DB file behind for benchmarks to copy
 }
 
+func BenchmarkCount(b *testing.B) {
+	// Copy template database
+	os.Remove("benchmark.db")
+	os.Remove("benchmark.db.wal")
+	err := copyFile("benchmark_template.db", "benchmark.db")
+	if err != nil {
+		b.Fatalf("Failed to copy template DB: %v", err)
+	}
+	if _, err := os.Stat("benchmark_template.db.wal"); err == nil {
+		copyFile("benchmark_template.db.wal", "benchmark.db.wal")
+	}
+
+	db, err := Open("benchmark.db")
+	if err != nil {
+		b.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove("benchmark.db")
+	defer os.Remove("benchmark.db.wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		b.Fatalf("Failed to create store: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := store.Count(context.Background())
+		if err != nil {
+			b.Fatalf("Failed to count: %v", err)
+		}
+	}
+}
+
 func BenchmarkGet(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
@@ -182,7 +216,7 @@ func BenchmarkBatchPut(b *testing.B) {
 	for i := 0; i < b.N/batchSize; i++ {
 		var users []TestUser
 		for j := 0; j < batchSize; j++ {
-			key := fmt.Sprintf("user_%d", (i*batchSize+j)%b.N)
+			key := fmt.Sprintf("user_%d", (i*batchSize)+j)
 			user := TestUser{UUID: key, Name: "John", Email: "john@example.com", Age: 30}
 			users = append(users, user)
 		}
@@ -304,7 +338,7 @@ func BenchmarkHighLoadConcurrent(b *testing.B) {
 			case 1: // Get
 				store.Get(context.Background(), fmt.Sprintf("user_%d", index%userCount))
 			case 2: // Query
-				store.Query(context.Background(), &Query{
+				store.GetQuery(context.Background(), &Query{
 					Conditions: []Condition{{Field: "Name", Value: "Alice"}},
 					Limit:      10,
 				})
@@ -325,8 +359,7 @@ func BenchmarkWALTruncation(b *testing.B) {
 	}
 
 	config := &Config{
-		WALFlushSize:     1024,
-		WALFlushInterval: time.Hour, // Prevent auto-flush
+		FlushInterval: time.Hour, // Prevent auto-flush
 		MaxBufferBytes:   100000,    // Large buffer
 	}
 	db, err := OpenWithConfig("benchmark.db", config)
@@ -343,7 +376,7 @@ func BenchmarkWALTruncation(b *testing.B) {
 	}
 
 	// Add some operations to buffer
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 1000; i++ {
 		user := TestUser{UUID: fmt.Sprintf("trunc_%d", i), Name: "Trunc", Email: "trunc@example.com", Age: i}
 		store.Put(context.Background(), user)
 	}

@@ -16,8 +16,7 @@ func TestConcurrency(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		WALFlushSize:     1,
-		WALFlushInterval: time.Hour,
+		FlushInterval: time.Hour,
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {
@@ -83,8 +82,7 @@ func TestRaceConditionsFlush(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		WALFlushSize:     1000, // Large to avoid auto-flush
-		WALFlushInterval: time.Hour,
+		FlushInterval: time.Hour,
 		MaxBufferBytes:   10000,
 	}
 	db, err := OpenWithConfig(dbPath, config)
@@ -150,8 +148,8 @@ func TestRaceConditionsIndexUpdates(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		WALFlushSize:     1,
-		WALFlushInterval: time.Hour,
+		FlushInterval: time.Hour,
+		MaxBufferBytes: 1,
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {
@@ -191,7 +189,7 @@ func TestRaceConditionsIndexUpdates(t *testing.T) {
 	db.Flush()
 
 	// Basic verification (exact state may vary due to concurrency)
-	results, err := store.Query(context.Background(), &Query{Limit: 100})
+	results, err := store.GetQuery(context.Background(), &Query{Limit: 100})
 	if err != nil {
 		t.Fatalf("Failed to query: %v", err)
 	}
@@ -206,8 +204,7 @@ func TestConcurrentQueries(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		WALFlushSize:     10,
-		WALFlushInterval: time.Hour,
+		FlushInterval: time.Hour,
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {
@@ -241,7 +238,7 @@ func TestConcurrentQueries(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < queriesPerGoroutine; j++ {
-				_, err := store.Query(context.Background(), &Query{
+				_, err := store.GetQuery(context.Background(), &Query{
 					Conditions: []Condition{{Field: "Name", Value: "Name1"}},
 					Limit:      10,
 				})
@@ -274,8 +271,7 @@ func TestConcurrentBatchOperations(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		WALFlushSize:     50,
-		WALFlushInterval: time.Hour,
+		FlushInterval: time.Hour,
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {
@@ -338,7 +334,7 @@ func TestConcurrentBatchOperations(t *testing.T) {
 	db.Flush()
 
 	// Verify some data exists
-	results, err := store.Query(context.Background(), &Query{Limit: 50})
+	results, err := store.GetQuery(context.Background(), &Query{Limit: 50})
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
 	}

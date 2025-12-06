@@ -25,7 +25,6 @@ The library supports various configuration options for customization:
 import "github.com/redkenrok/nnut"
 
 config := &nnut.Config{
-  WALFlushSize: 1024, // Flushes when mutations count exceeds
   WALFlushInterval: time.Minute * 15, // Flushes every 15 minutes
   BBoltOptions: &bolt.Options{
     Timeout: time.Second * 10,
@@ -43,7 +42,6 @@ EncryptionKey: []byte("your-32-byte-encryption-key"),  -->
 
 <!--- **EncryptionAlgorithm**: [...]
 - **EncryptionKey**: 32-byte key for encrypting marked fields-->
-- **WALFlushSize**: Size of the mutations buffer
 - **WALFlushInterval**: How often to flush WAL to disk
 - **BBoltOptions**: Standard bbolt database options (timeout, read-only mode, etc.)
 

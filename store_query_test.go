@@ -38,7 +38,7 @@ func TestQuery(t *testing.T) {
 	db.Flush()
 
 	// Test filtering by indexed field
-	retrievedResults, err := store.Query(context.Background(), &Query{
+	retrievedResults, err := store.GetQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Name", Value: "Alice"},
 		},
@@ -87,7 +87,7 @@ func TestQueryMultipleConditions(t *testing.T) {
 	db.Flush()
 
 	// Test combining indexed and non-indexed conditions
-	results, err := store.Query(context.Background(), &Query{
+	results, err := store.GetQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Name", Value: "Alice"},
 			{Field: "Age", Value: 30, Operator: GreaterThan},
@@ -134,7 +134,7 @@ func TestQuerySorting(t *testing.T) {
 	db.Flush()
 
 	// Test ordering results using index
-	results, err := store.Query(context.Background(), &Query{
+	results, err := store.GetQuery(context.Background(), &Query{
 		Index: "name",
 		Sort:  Ascending,
 	})
@@ -149,7 +149,7 @@ func TestQuerySorting(t *testing.T) {
 	}
 
 	// Query sorted by name descending
-	results, err = store.Query(context.Background(), &Query{
+	results, err = store.GetQuery(context.Background(), &Query{
 		Index: "name",
 		Sort:  Descending,
 	})
@@ -192,7 +192,7 @@ func TestQueryLimitOffset(t *testing.T) {
 	db.Flush()
 
 	// Test pagination with limit
-	results, err := store.Query(context.Background(), &Query{
+	results, err := store.GetQuery(context.Background(), &Query{
 		Index: "name",
 		Sort:  Ascending,
 		Limit: 2,
@@ -208,7 +208,7 @@ func TestQueryLimitOffset(t *testing.T) {
 	}
 
 	// Query with offset
-	results, err = store.Query(context.Background(), &Query{
+	results, err = store.GetQuery(context.Background(), &Query{
 		Index:  "name",
 		Sort:   Ascending,
 		Offset: 1,
@@ -256,7 +256,7 @@ func TestQueryOperators(t *testing.T) {
 	db.Flush()
 
 	// Test GreaterThan on Age
-	retrievedResults, err := store.Query(context.Background(), &Query{
+	retrievedResults, err := store.GetQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Age", Value: 30, Operator: GreaterThan},
 		},
@@ -274,7 +274,7 @@ func TestQueryOperators(t *testing.T) {
 	}
 
 	// Test LessThanOrEqual on Name
-	retrievedResults, err = store.Query(context.Background(), &Query{
+	retrievedResults, err = store.GetQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Name", Value: "Bob", Operator: LessThanOrEqual},
 		},
@@ -318,7 +318,7 @@ func TestQueryCount(t *testing.T) {
 	db.Flush()
 
 	// Count with condition
-	count, err := store.QueryCount(context.Background(), &Query{
+	count, err := store.CountQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Name", Value: "Alice"},
 		},
@@ -361,7 +361,7 @@ func TestQueryNoConditionsLimit(t *testing.T) {
 	db.Flush()
 
 	// Query no conditions, no limit
-	results, err := store.Query(context.Background(), &Query{})
+	results, err := store.GetQuery(context.Background(), &Query{})
 	if err != nil {
 		t.Fatalf("Failed to query: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestQueryNoConditionsLimit(t *testing.T) {
 	}
 
 	// Query no conditions with limit
-	results, err = store.Query(context.Background(), &Query{
+	results, err = store.GetQuery(context.Background(), &Query{
 		Limit: 2,
 	})
 	if err != nil {
@@ -413,7 +413,7 @@ func TestQueryNonIndexedWithLimit(t *testing.T) {
 	db.Flush()
 
 	// Query non-indexed field with limit
-	results, err := store.Query(context.Background(), &Query{
+	results, err := store.GetQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Age", Value: 25, Operator: GreaterThan},
 		},
@@ -459,7 +459,7 @@ func TestQueryComplexWithLimit(t *testing.T) {
 	db.Flush()
 
 	// Query with mixed conditions and limit
-	results, err := store.Query(context.Background(), &Query{
+	results, err := store.GetQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Name", Value: "A", Operator: GreaterThanOrEqual}, // Alice, Bob, Charlie, David
 			{Field: "Age", Value: 30, Operator: LessThan},             // Bob (25)
@@ -512,7 +512,7 @@ func TestQueryLargeLimit(t *testing.T) {
 	db.Flush()
 
 	// Query with large limit
-	results, err := store.Query(context.Background(), &Query{
+	results, err := store.GetQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Name", Value: "User", Operator: GreaterThanOrEqual},
 		},
@@ -557,7 +557,7 @@ func TestQueryOffsetNoLimit(t *testing.T) {
 	db.Flush()
 
 	// Query with offset but no limit
-	results, err := store.Query(context.Background(), &Query{
+	results, err := store.GetQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Name", Value: "Alice"},
 		},
@@ -601,7 +601,7 @@ func TestQueryCountAll(t *testing.T) {
 	db.Flush()
 
 	// Count no conditions
-	count, err := store.QueryCount(context.Background(), &Query{})
+	count, err := store.CountQuery(context.Background(), &Query{})
 	if err != nil {
 		t.Fatalf("Failed to query count: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestQueryCountNonIndexed(t *testing.T) {
 	db.Flush()
 
 	// Count non-indexed
-	count, err := store.QueryCount(context.Background(), &Query{
+	count, err := store.CountQuery(context.Background(), &Query{
 		Conditions: []Condition{
 			{Field: "Age", Value: 25, Operator: GreaterThan},
 		},
@@ -650,6 +650,543 @@ func TestQueryCountNonIndexed(t *testing.T) {
 	}
 	if count != 2 { // 30 and 40
 		t.Fatalf("Expected count 2, got %d", count)
+	}
+}
+
+func TestCount(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Bob", Email: "bob@example.com", Age: 25},
+		{UUID: "3", Name: "Alice", Email: "alice2@example.com", Age: 35},
+		{UUID: "4", Name: "Charlie", Email: "charlie@example.com", Age: 30},
+	}
+	for _, user := range testUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Test count for total items (should be 4)
+	count, err := store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to count: %v", err)
+	}
+	if count != 4 {
+		t.Fatalf("Expected count 4, got %d", count)
+	}
+}
+
+func TestCountEmptyIndex(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	// No data added, store should be empty
+	count, err := store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to count empty store: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("Expected count 0 for empty store, got %d", count)
+	}
+}
+
+func TestCountWithBufferedOperations(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	// Add some initial data and flush
+	initialUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Bob", Email: "bob@example.com", Age: 25},
+	}
+	for _, user := range initialUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Count should be 2
+	count, err := store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("Expected count 2, got %d", count)
+	}
+
+	// Add more users without flushing (buffered)
+	bufferedUsers := []TestUser{
+		{UUID: "3", Name: "Charlie", Email: "charlie@example.com", Age: 35}, // new
+		{UUID: "4", Name: "David", Email: "david@example.com", Age: 40},     // new
+	}
+	for _, user := range bufferedUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+
+	// Count should now include buffered operations (4 total)
+	count, err = store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to count with buffered ops: %v", err)
+	}
+	if count != 4 {
+		t.Fatalf("Expected count 4 with buffered operations, got %d", count)
+	}
+
+	// Delete one existing user (buffered)
+	err = store.Delete(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("Failed to delete: %v", err)
+	}
+
+	// Count should be 3 (2 flushed + 2 buffered puts - 1 buffered delete)
+	count, err = store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to count after buffered delete: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("Expected count 3 after buffered delete, got %d", count)
+	}
+}
+
+func TestCountIdenticalValues(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	// Add users with identical names
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice1@example.com", Age: 30},
+		{UUID: "2", Name: "Alice", Email: "alice2@example.com", Age: 25},
+		{UUID: "3", Name: "Alice", Email: "alice3@example.com", Age: 35},
+	}
+	for _, user := range testUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Should return 3 total items
+	count, err := store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to count: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("Expected count 3 for total items, got %d", count)
+	}
+}
+
+func TestCountContextCancellation(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+	}
+	for _, user := range testUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Create cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err = store.Count(ctx)
+	if err != context.Canceled {
+		t.Fatalf("Expected context.Canceled, got %v", err)
+	}
+}
+
+func TestDeleteQuery(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Bob", Email: "bob@example.com", Age: 25},
+		{UUID: "3", Name: "Alice", Email: "alice2@example.com", Age: 35},
+		{UUID: "4", Name: "Charlie", Email: "charlie@example.com", Age: 30},
+	}
+	for _, user := range testUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Delete users with name "Alice"
+	deletedCount, err := store.DeleteQuery(context.Background(), &Query{
+		Conditions: []Condition{
+			{Field: "Name", Value: "Alice"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to delete query: %v", err)
+	}
+	if deletedCount != 2 {
+		t.Fatalf("Expected 2 deletions, got %d", deletedCount)
+	}
+
+	// Verify deletions by querying remaining users
+	results, err := store.GetQuery(context.Background(), &Query{})
+	if err != nil {
+		t.Fatalf("Failed to query: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 remaining users, got %d", len(results))
+	}
+
+	// Verify total count is updated
+	count, err := store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to count: %v", err)
+	}
+	if count != 2 { // Bob and Charlie
+		t.Fatalf("Expected count 2, got %d", count)
+	}
+}
+
+func TestDeleteQueryLimitOffset(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Alice", Email: "alice2@example.com", Age: 25},
+		{UUID: "3", Name: "Bob", Email: "bob@example.com", Age: 35},
+		{UUID: "4", Name: "Charlie", Email: "charlie@example.com", Age: 40},
+	}
+	for _, user := range testUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Delete with limit 1, offset 0 (should delete first Alice)
+	deletedCount, err := store.DeleteQuery(context.Background(), &Query{
+		Conditions: []Condition{
+			{Field: "Name", Value: "Alice"},
+		},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Failed to delete query with limit: %v", err)
+	}
+	if deletedCount != 1 {
+		t.Fatalf("Expected 1 deletion, got %d", deletedCount)
+	}
+
+	// Verify remaining Alice still exists
+	results, err := store.GetQuery(context.Background(), &Query{
+		Conditions: []Condition{
+			{Field: "Name", Value: "Alice"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to query: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 Alice remaining, got %d", len(results))
+	}
+}
+
+func TestDeleteQueryNoConditions(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Bob", Email: "bob@example.com", Age: 25},
+	}
+	for _, user := range testUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Delete all records (no conditions)
+	deletedCount, err := store.DeleteQuery(context.Background(), &Query{})
+	if err != nil {
+		t.Fatalf("Failed to delete all: %v", err)
+	}
+	if deletedCount != 2 {
+		t.Fatalf("Expected 2 deletions, got %d", deletedCount)
+	}
+
+	// Verify no records remain
+	results, err := store.GetQuery(context.Background(), &Query{})
+	if err != nil {
+		t.Fatalf("Failed to query: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("Expected 0 records remaining, got %d", len(results))
+	}
+
+	// Verify store is empty
+	count, err := store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("Expected count 0, got %d", count)
+	}
+}
+
+func TestDeleteQueryNonIndexedConditions(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Bob", Email: "bob@example.com", Age: 25},
+		{UUID: "3", Name: "Charlie", Email: "charlie@example.com", Age: 35},
+	}
+	for _, user := range testUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Delete users with Age > 30 (non-indexed condition)
+	deletedCount, err := store.DeleteQuery(context.Background(), &Query{
+		Conditions: []Condition{
+			{Field: "Age", Value: 30, Operator: GreaterThan},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to delete with non-indexed condition: %v", err)
+	}
+	if deletedCount != 1 { // Charlie with Age 35
+		t.Fatalf("Expected 1 deletion, got %d", deletedCount)
+	}
+
+	// Verify remaining users
+	results, err := store.GetQuery(context.Background(), &Query{})
+	if err != nil {
+		t.Fatalf("Failed to query: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 users remaining, got %d", len(results))
+	}
+}
+
+func TestDeleteQueryMultipleConditions(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Alice", Email: "alice2@example.com", Age: 25},
+		{UUID: "3", Name: "Bob", Email: "bob@example.com", Age: 30},
+	}
+	for _, user := range testUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Delete users with Name="Alice" AND Age=30 (should delete only first Alice)
+	deletedCount, err := store.DeleteQuery(context.Background(), &Query{
+		Conditions: []Condition{
+			{Field: "Name", Value: "Alice"},
+			{Field: "Age", Value: 30, Operator: Equals},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to delete with multiple conditions: %v", err)
+	}
+	if deletedCount != 1 {
+		t.Fatalf("Expected 1 deletion, got %d", deletedCount)
+	}
+
+	// Verify remaining users: Alice(25), Bob(30)
+	results, err := store.GetQuery(context.Background(), &Query{})
+	if err != nil {
+		t.Fatalf("Failed to query: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 users remaining, got %d", len(results))
+	}
+}
+
+func TestDeleteQueryContextCancellation(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Bob", Email: "bob@example.com", Age: 25},
+	}
+	for _, user := range testUsers {
+		err = store.Put(context.Background(), user)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Create cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err = store.DeleteQuery(ctx, &Query{})
+	if err != context.Canceled {
+		t.Fatalf("Expected context.Canceled, got %v", err)
 	}
 }
 
@@ -686,7 +1223,9 @@ func FuzzQueryConditions(f *testing.F) {
 		condition := Condition{Field: field, Value: valueStr, Operator: operator}
 
 		// This should not panic or crash
-		_, _ = store.Query(context.Background(), &Query{Conditions: []Condition{condition}})
-		_, _ = store.QueryCount(context.Background(), &Query{Conditions: []Condition{condition}})
+		_, _ = store.GetQuery(context.Background(), &Query{Conditions: []Condition{condition}})
+		_, _ = store.CountQuery(context.Background(), &Query{Conditions: []Condition{condition}})
+		_, _ = store.Count(context.Background())                                                             // Test Count method
+		_, _ = store.DeleteQuery(context.Background(), &Query{Conditions: []Condition{condition}, Limit: 1}) // Test DeleteQuery with limit to avoid deleting everything
 	})
 }

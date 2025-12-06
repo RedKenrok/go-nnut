@@ -8,8 +8,8 @@ import (
 )
 
 func TestInvalidConfigError(t *testing.T) {
-	err := InvalidConfigError{Field: "WALFlushSize", Value: -1, Reason: "must be positive"}
-	expected := "invalid config WALFlushSize=-1: must be positive"
+	err := InvalidConfigError{Field: "MaxBufferBytes", Value: -1, Reason: "must be positive"}
+	expected := "invalid config MaxBufferBytes=-1: must be positive"
 	if err.Error() != expected {
 		t.Errorf("Expected %q, got %q", expected, err.Error())
 	}
@@ -157,30 +157,18 @@ func TestConfigValidation(t *testing.T) {
 			errField: "config",
 		},
 		{
-			name: "negative WALFlushSize",
+			name: "zero FlushInterval",
 			config: &Config{
-				WALFlushSize:     -1,
-				WALFlushInterval: time.Minute,
+				FlushInterval: 0,
 				WALPath:          "/tmp/test.wal",
 			},
 			wantErr:  true,
-			errField: "WALFlushSize",
-		},
-		{
-			name: "zero WALFlushInterval",
-			config: &Config{
-				WALFlushSize:     100,
-				WALFlushInterval: 0,
-				WALPath:          "/tmp/test.wal",
-			},
-			wantErr:  true,
-			errField: "WALFlushInterval",
+			errField: "FlushInterval",
 		},
 		{
 			name: "empty WALPath",
 			config: &Config{
-				WALFlushSize:     100,
-				WALFlushInterval: time.Minute,
+				FlushInterval: time.Minute,
 				WALPath:          "",
 			},
 			wantErr:  true,
@@ -189,8 +177,7 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "valid config",
 			config: &Config{
-				WALFlushSize:     100,
-				WALFlushInterval: time.Minute,
+				FlushInterval: time.Minute,
 				WALPath:          "/tmp/test.wal",
 				MaxBufferBytes:   1024 * 1024,
 			},

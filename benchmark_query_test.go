@@ -34,7 +34,7 @@ func BenchmarkQuery(b *testing.B) {
 	// Test typical query patterns
 	b.ResetTimer()
 	for iteration := 0; iteration < b.N; iteration++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Conditions: []Condition{
 				{Field: "Name", Value: "Alice"},
 			},
@@ -73,7 +73,7 @@ func BenchmarkQueryMultipleConditions(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Conditions: []Condition{
 				{Field: "Name", Value: "Alice"},
 				{Field: "Age", Value: 30, Operator: GreaterThan},
@@ -114,7 +114,7 @@ func BenchmarkQuerySorting(b *testing.B) {
 	b.ResetTimer()
 	// Query with sorting by name
 	for i := 0; i < b.N; i++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Index: "name",
 			Sort:  Descending,
 			Limit: 100,
@@ -153,7 +153,7 @@ func BenchmarkQueryLimitOffset(b *testing.B) {
 	b.ResetTimer()
 	// Query with limit and offset
 	for i := 0; i < b.N; i++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Conditions: []Condition{
 				{Field: "Name", Value: "Alice"},
 			},
@@ -194,7 +194,7 @@ func BenchmarkQueryCount(b *testing.B) {
 	b.ResetTimer()
 	// Count users with a specific name
 	for i := 0; i < b.N; i++ {
-		_, err := store.QueryCount(context.Background(), &Query{
+		_, err := store.CountQuery(context.Background(), &Query{
 			Conditions: []Condition{
 				{Field: "Name", Value: "Alice"},
 			},
@@ -233,7 +233,7 @@ func BenchmarkQueryCountIndex(b *testing.B) {
 	b.ResetTimer()
 	// Count all users using index
 	for i := 0; i < b.N; i++ {
-		_, err := store.QueryCount(context.Background(), &Query{
+		_, err := store.CountQuery(context.Background(), &Query{
 			Index: "name",
 		})
 		if err != nil {
@@ -269,7 +269,7 @@ func BenchmarkQueryNoConditions(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Limit: 100,
 		})
 		if err != nil {
@@ -305,7 +305,7 @@ func BenchmarkQueryNonIndexedField(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Conditions: []Condition{
 				{Field: "Age", Value: 25, Operator: GreaterThan},
 			},
@@ -344,7 +344,7 @@ func BenchmarkQueryComplexOperators(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Conditions: []Condition{
 				{Field: "Name", Value: "A", Operator: GreaterThanOrEqual},
 				{Field: "Age", Value: 30, Operator: LessThan},
@@ -384,7 +384,7 @@ func BenchmarkQueryLargeLimit(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Conditions: []Condition{
 				{Field: "Name", Value: "Alice"},
 			},
@@ -423,7 +423,7 @@ func BenchmarkQueryOffsetOnly(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Conditions: []Condition{
 				{Field: "Name", Value: "Alice"},
 			},
@@ -462,7 +462,7 @@ func BenchmarkQuerySortingAscending(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := store.Query(context.Background(), &Query{
+		_, err := store.GetQuery(context.Background(), &Query{
 			Index: "name",
 			Sort:  Ascending,
 			Limit: 100,
@@ -500,7 +500,7 @@ func BenchmarkQueryCountNoConditions(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := store.QueryCount(context.Background(), &Query{})
+		_, err := store.CountQuery(context.Background(), &Query{})
 		if err != nil {
 			b.Fatalf("Failed to query count no conditions: %v", err)
 		}
@@ -534,7 +534,7 @@ func BenchmarkQueryCountNonIndexed(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := store.QueryCount(context.Background(), &Query{
+		_, err := store.CountQuery(context.Background(), &Query{
 			Conditions: []Condition{
 				{Field: "Age", Value: 25, Operator: GreaterThan},
 			},
@@ -542,5 +542,45 @@ func BenchmarkQueryCountNonIndexed(b *testing.B) {
 		if err != nil {
 			b.Fatalf("Failed to query count non-indexed: %v", err)
 		}
+	}
+}
+
+func BenchmarkDeleteQuery(b *testing.B) {
+	// Copy template database for each benchmark run
+	for i := 0; i < b.N; i++ {
+		os.Remove("benchmark.db")
+		os.Remove("benchmark.db.wal")
+		err := copyFile("benchmark_template.db", "benchmark.db")
+		if err != nil {
+			b.Fatalf("Failed to copy template DB: %v", err)
+		}
+		if _, err := os.Stat("benchmark_template.db.wal"); err == nil {
+			copyFile("benchmark_template.db.wal", "benchmark.db.wal")
+		}
+
+		db, err := Open("benchmark.db")
+		if err != nil {
+			b.Fatalf("Failed to open DB: %v", err)
+		}
+
+		store, err := NewStore[TestUser](db, "users")
+		if err != nil {
+			b.Fatalf("Failed to create store: %v", err)
+		}
+
+		// Delete a small subset to avoid depleting the database
+		_, err = store.DeleteQuery(context.Background(), &Query{
+			Conditions: []Condition{
+				{Field: "Name", Value: "Alice", Operator: Equals},
+			},
+			Limit: 1, // Only delete one to keep DB populated
+		})
+		if err != nil {
+			b.Fatalf("Failed to delete query: %v", err)
+		}
+
+		db.Close()
+		os.Remove("benchmark.db")
+		os.Remove("benchmark.db.wal")
 	}
 }

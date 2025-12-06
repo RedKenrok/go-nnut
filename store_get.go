@@ -141,3 +141,79 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 
 	return results, err
 }
+
+// GetQuery queries for records matching the conditions
+func (s *Store[T]) GetQuery(ctx context.Context, query *Query) ([]T, error) {
+	if err := s.validateQuery(query); err != nil {
+		return nil, err
+	}
+
+	var results []T
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	err := s.database.View(func(tx *bbolt.Tx) error {
+		// Determine the maximum number of keys needed based on limit and offset
+		maxKeys := 0
+		if query.Limit > 0 {
+			maxKeys = query.Offset + query.Limit
+		}
+
+		// Gather keys that potentially match the query conditions
+		var candidateKeys []string
+		if len(query.Conditions) > 0 {
+			candidateKeys = s.getCandidateKeysTx(tx, query.Conditions, maxKeys)
+		} else if query.Index != "" {
+			// When no conditions but sorting is required, use the index directly
+			candidateKeys = s.getKeysFromIndexTx(tx, query.Index, query.Sort, maxKeys)
+		} else {
+			// Fallback to scanning all keys when no optimizations apply
+			candidateKeys = s.getAllKeysTx(tx, maxKeys)
+		}
+
+		// Skip offset and take only limit number of keys
+		start := query.Offset
+		if start > len(candidateKeys) {
+			start = len(candidateKeys)
+		}
+		end := len(candidateKeys)
+		if query.Limit > 0 && start+query.Limit < end {
+			end = start + query.Limit
+		}
+		keysToFetch := candidateKeys[start:end]
+
+		// Retrieve the actual data for the selected keys
+		bucket := tx.Bucket(s.bucket)
+		if bucket == nil {
+			return BucketNotFoundError{Bucket: string(s.bucket)}
+		}
+		decoder := msgpack.GetDecoder()
+		defer msgpack.PutDecoder(decoder)
+		for _, key := range keysToFetch {
+			data := bucket.Get([]byte(key))
+			if data == nil {
+				continue
+			}
+			var item T
+			decoder.Reset(bytes.NewReader(data))
+			err := decoder.Decode(&item)
+			if err != nil {
+				continue
+			}
+			results = append(results, item)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply sorting if the index wasn't used for ordering
+	if query.Index != "" && len(query.Conditions) > 0 {
+		s.sortResults(results, query.Index, query.Sort)
+	}
+
+	return results, nil
+}

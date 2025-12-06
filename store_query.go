@@ -2,7 +2,6 @@ package nnut
 
 import (
 	"bytes"
-	"context"
 	"reflect"
 	"sort"
 	"sync"
@@ -56,6 +55,11 @@ type Query struct {
 	Conditions []Condition
 }
 
+type condWithSize struct {
+	cond Condition
+	size int
+}
+
 // validateQuery validates query parameters
 func (s *Store[T]) validateQuery(query *Query) error {
 	if query == nil {
@@ -88,119 +92,6 @@ func (s *Store[T]) validateQuery(query *Query) error {
 		}
 	}
 	return nil
-}
-
-type condWithSize struct {
-	cond Condition
-	size int
-}
-
-// Query queries for records matching the conditions
-func (s *Store[T]) Query(ctx context.Context, query *Query) ([]T, error) {
-	if err := s.validateQuery(query); err != nil {
-		return nil, err
-	}
-
-	var results []T
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-	err := s.database.View(func(tx *bbolt.Tx) error {
-		// Determine the maximum number of keys needed based on limit and offset
-		maxKeys := 0
-		if query.Limit > 0 {
-			maxKeys = query.Offset + query.Limit
-		}
-
-		// Gather keys that potentially match the query conditions
-		var candidateKeys []string
-		if len(query.Conditions) > 0 {
-			candidateKeys = s.getCandidateKeysTx(tx, query.Conditions, maxKeys)
-		} else if query.Index != "" {
-			// When no conditions but sorting is required, use the index directly
-			candidateKeys = s.getKeysFromIndexTx(tx, query.Index, query.Sort, maxKeys)
-		} else {
-			// Fallback to scanning all keys when no optimizations apply
-			candidateKeys = s.getAllKeysTx(tx, maxKeys)
-		}
-
-		// Skip offset and take only limit number of keys
-		start := query.Offset
-		if start > len(candidateKeys) {
-			start = len(candidateKeys)
-		}
-		end := len(candidateKeys)
-		if query.Limit > 0 && start+query.Limit < end {
-			end = start + query.Limit
-		}
-		keysToFetch := candidateKeys[start:end]
-
-		// Retrieve the actual data for the selected keys
-		bucket := tx.Bucket(s.bucket)
-		if bucket == nil {
-			return BucketNotFoundError{Bucket: string(s.bucket)}
-		}
-		decoder := msgpack.GetDecoder()
-		defer msgpack.PutDecoder(decoder)
-		for _, key := range keysToFetch {
-			data := bucket.Get([]byte(key))
-			if data == nil {
-				continue
-			}
-			var item T
-			decoder.Reset(bytes.NewReader(data))
-			err := decoder.Decode(&item)
-			if err != nil {
-				continue
-			}
-			results = append(results, item)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// Apply sorting if the index wasn't used for ordering
-	if query.Index != "" && len(query.Conditions) > 0 {
-		s.sortResults(results, query.Index, query.Sort)
-	}
-
-	return results, nil
-}
-
-// QueryCount returns the number of records matching the query
-func (s *Store[T]) QueryCount(ctx context.Context, query *Query) (int, error) {
-	if err := s.validateQuery(query); err != nil {
-		return 0, err
-	}
-
-	var count int
-	select {
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	default:
-	}
-	err := s.database.View(func(tx *bbolt.Tx) error {
-		// Collect candidate keys from conditions
-		var candidateKeys []string
-		if len(query.Conditions) > 0 {
-			candidateKeys = s.getCandidateKeysTx(tx, query.Conditions, 0)
-		} else if query.Index != "" {
-			// No conditions, but index, count from index
-			count = s.countKeysFromIndexTx(tx, query.Index)
-			return nil
-		} else {
-			// No conditions, no index, count all keys
-			count = s.countAllKeysTx(tx)
-			return nil
-		}
-		count = len(candidateKeys)
-		return nil
-	})
-	return count, err
 }
 
 // getCandidateKeysTx returns keys that match all conditions using the provided tx
@@ -602,6 +493,40 @@ func (s *Store[T]) countKeysFromIndexTx(tx *bbolt.Tx, index string) int {
 	for keyBytes, _ := cursor.First(); keyBytes != nil; keyBytes, _ = cursor.Next() {
 		count++
 	}
+	return count
+}
+
+// countUniqueValuesFromIndexTx returns the count of unique values in the index
+func (s *Store[T]) countUniqueValuesFromIndexTx(tx *bbolt.Tx, index string) int {
+	indexBucketName := string(s.bucket) + "_index_" + index
+	indexBucket := tx.Bucket([]byte(indexBucketName))
+	if indexBucket == nil {
+		return 0
+	}
+
+	cursor := indexBucket.Cursor()
+	var count int
+	var lastValue []byte
+
+	for keyBytes, _ := cursor.First(); keyBytes != nil; keyBytes, _ = cursor.Next() {
+		// Find the position of the null byte separator
+		nullPos := bytes.IndexByte(keyBytes, '\x00')
+		if nullPos == -1 {
+			continue // Malformed key, skip
+		}
+
+		// Extract the value part (everything before \x00)
+		currentValue := keyBytes[:nullPos]
+
+		// If this is the first value or different from the last one, increment count
+		if lastValue == nil || !bytes.Equal(currentValue, lastValue) {
+			count++
+			// Allocate a copy for comparison with next iteration
+			lastValue = make([]byte, len(currentValue))
+			copy(lastValue, currentValue)
+		}
+	}
+
 	return count
 }
 

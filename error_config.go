@@ -6,10 +6,10 @@ import "fmt"
 //
 // Example:
 //
-//	config := &Config{WALFlushSize: -1}
+//	config := &Config{MaxBufferBytes: -1}
 //	err := validateConfig(config)
 //	if invalid, ok := err.(InvalidConfigError); ok {
-//	    fmt.Printf("Config error: %s", invalid.Field) // Output: WALFlushSize
+//	    fmt.Printf("Config error: %s", invalid.Field) // Output: MaxBufferBytes
 //	}
 type InvalidConfigError struct {
 	Field  string
