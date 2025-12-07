@@ -16,7 +16,7 @@ import (
 
 // Config holds configuration options
 type Config struct {
-	FlushInterval time.Duration
+	FlushInterval    time.Duration
 	WALPath          string
 	MaxBufferBytes   int
 	FlushChannelSize int // Size of the flush channel buffer (default 10)
@@ -62,7 +62,7 @@ type walEntry struct {
 // Open opens a database with default config
 func Open(path string) (*DB, error) {
 	config := &Config{
-		FlushInterval: time.Minute * 15,
+		FlushInterval:    time.Minute * 15,
 		WALPath:          path + ".wal",
 		MaxBufferBytes:   10 * 1024 * 1024, // 10MB
 		FlushChannelSize: 10,

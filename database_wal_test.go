@@ -47,8 +47,8 @@ func TestWALFlushInterval(t *testing.T) {
 
 func TestSizeBasedFlush(t *testing.T) {
 	config := &Config{
-		FlushInterval: time.Hour, // Long to not trigger
-		MaxBufferBytes:   1000,      // Small size to trigger flush
+		FlushInterval:  time.Hour, // Long to not trigger
+		MaxBufferBytes: 1000,      // Small size to trigger flush
 	}
 	db, err := OpenWithConfig("test.db", config)
 	if err != nil {
@@ -94,8 +94,8 @@ func TestWALRecoveryAfterSimulatedCrash(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		FlushInterval: time.Hour,
-		MaxBufferBytes:   1000000, // Large buffer to prevent flush during puts
+		FlushInterval:  time.Hour,
+		MaxBufferBytes: 1000000, // Large buffer to prevent flush during puts
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {
@@ -201,8 +201,8 @@ func TestWALChecksumVerification(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		FlushInterval: time.Hour,
-		MaxBufferBytes:   100000,
+		FlushInterval:  time.Hour,
+		MaxBufferBytes: 100000,
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {
@@ -266,8 +266,8 @@ func TestWALTruncation(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		FlushInterval: time.Hour, // Prevent auto-flush
-		MaxBufferBytes:   100000,    // Large buffer to prevent auto-flush
+		FlushInterval:  time.Hour, // Prevent auto-flush
+		MaxBufferBytes: 100000,    // Large buffer to prevent auto-flush
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {

@@ -115,7 +115,7 @@ func BenchmarkQuerySorting(b *testing.B) {
 	// Query with sorting by name
 	for i := 0; i < b.N; i++ {
 		_, err := store.GetQuery(context.Background(), &Query{
-			Index: "name",
+			Index: "Name",
 			Sort:  Descending,
 			Limit: 100,
 		})
@@ -234,7 +234,7 @@ func BenchmarkQueryCountIndex(b *testing.B) {
 	// Count all users using index
 	for i := 0; i < b.N; i++ {
 		_, err := store.CountQuery(context.Background(), &Query{
-			Index: "name",
+			Index: "Name",
 		})
 		if err != nil {
 			b.Fatalf("Failed to query count index: %v", err)
@@ -463,7 +463,7 @@ func BenchmarkQuerySortingAscending(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := store.GetQuery(context.Background(), &Query{
-			Index: "name",
+			Index: "Name",
 			Sort:  Ascending,
 			Limit: 100,
 		})

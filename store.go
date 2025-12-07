@@ -2,7 +2,6 @@ package nnut
 
 import (
 	"reflect"
-	"strings"
 )
 
 const (
@@ -15,7 +14,7 @@ type Store[T any] struct {
 	database    *DB
 	bucket      []byte
 	keyField    int            // index of the field tagged with nnut:"key"
-	indexFields map[string]int // index name -> field index
+	indexFields map[string]int // field name -> field index
 	fieldMap    map[string]int // field name -> field index
 }
 
@@ -52,12 +51,8 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 				return nil, KeyFieldNotStringError{FieldName: field.Name}
 			}
 			keyFieldIndex = fieldIndex
-		} else if strings.HasPrefix(tagValue, "index:") {
-			parts := strings.Split(tagValue, ":")
-			if len(parts) == 2 {
-				indexName := parts[1]
-				indexFields[indexName] = fieldIndex
-			}
+		} else if tagValue == "index" {
+			indexFields[field.Name] = fieldIndex
 		}
 	}
 	if keyFieldIndex == -1 {
@@ -65,13 +60,13 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 	}
 
 	// Validate index fields are strings or comparable (int)
-	for indexName, fieldIndex := range indexFields {
+	for fieldName, fieldIndex := range indexFields {
 		field := typeOfStruct.Field(fieldIndex)
 		kind := field.Type.Kind()
 		if kind != reflect.String && kind != reflect.Int {
 			return nil, IndexFieldTypeError{FieldName: field.Name, Type: field.Type.String()}
 		}
-		_ = indexName // avoid unused variable
+		_ = fieldName // avoid unused variable
 	}
 
 	return &Store[T]{
@@ -87,10 +82,10 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 func (s *Store[T]) extractIndexValues(value T) map[string]string {
 	structValue := reflect.ValueOf(value)
 	result := make(map[string]string)
-	for indexName, fieldIndex := range s.indexFields {
+	for fieldName, fieldIndex := range s.indexFields {
 		fieldValue := structValue.Field(fieldIndex)
 		if fieldValue.Kind() == reflect.String {
-			result[indexName] = fieldValue.String()
+			result[fieldName] = fieldValue.String()
 		}
 	}
 	return result

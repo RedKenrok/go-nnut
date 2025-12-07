@@ -61,8 +61,8 @@ func TestPartialBatchError(t *testing.T) {
 
 func TestIndexError(t *testing.T) {
 	underlying := errors.New("bucket creation failed")
-	err := IndexError{IndexName: "email", Operation: "create_bucket", Bucket: "users", Key: "user123", Err: underlying}
-	expected := "index 'email' create_bucket failed for bucket 'users', key 'user123': bucket creation failed"
+	err := IndexError{IndexName: "Email", Operation: "create_bucket", Bucket: "users", Key: "user123", Err: underlying}
+	expected := "index 'Email' create_bucket failed for bucket 'users', key 'user123': bucket creation failed"
 	if err.Error() != expected {
 		t.Errorf("Expected %q, got %q", expected, err.Error())
 	}
@@ -160,7 +160,7 @@ func TestConfigValidation(t *testing.T) {
 			name: "zero FlushInterval",
 			config: &Config{
 				FlushInterval: 0,
-				WALPath:          "/tmp/test.wal",
+				WALPath:       "/tmp/test.wal",
 			},
 			wantErr:  true,
 			errField: "FlushInterval",
@@ -169,7 +169,7 @@ func TestConfigValidation(t *testing.T) {
 			name: "empty WALPath",
 			config: &Config{
 				FlushInterval: time.Minute,
-				WALPath:          "",
+				WALPath:       "",
 			},
 			wantErr:  true,
 			errField: "WALPath",
@@ -177,9 +177,9 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "valid config",
 			config: &Config{
-				FlushInterval: time.Minute,
-				WALPath:          "/tmp/test.wal",
-				MaxBufferBytes:   1024 * 1024,
+				FlushInterval:  time.Minute,
+				WALPath:        "/tmp/test.wal",
+				MaxBufferBytes: 1024 * 1024,
 			},
 			wantErr: false,
 		},
@@ -262,7 +262,7 @@ func TestQueryValidation(t *testing.T) {
 		{
 			name: "valid query",
 			query: &Query{
-				Index:  "email", // This exists in TestUser
+				Index:  "Email", // This exists in TestUser
 				Limit:  10,
 				Offset: 5,
 			},

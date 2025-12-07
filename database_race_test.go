@@ -82,8 +82,8 @@ func TestRaceConditionsFlush(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		FlushInterval: time.Hour,
-		MaxBufferBytes:   10000,
+		FlushInterval:  time.Hour,
+		MaxBufferBytes: 10000,
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {
@@ -148,7 +148,7 @@ func TestRaceConditionsIndexUpdates(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		FlushInterval: time.Hour,
+		FlushInterval:  time.Hour,
 		MaxBufferBytes: 1,
 	}
 	db, err := OpenWithConfig(dbPath, config)

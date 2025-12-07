@@ -359,8 +359,8 @@ func BenchmarkWALTruncation(b *testing.B) {
 	}
 
 	config := &Config{
-		FlushInterval: time.Hour, // Prevent auto-flush
-		MaxBufferBytes:   100000,    // Large buffer
+		FlushInterval:  time.Hour, // Prevent auto-flush
+		MaxBufferBytes: 100000,    // Large buffer
 	}
 	db, err := OpenWithConfig("benchmark.db", config)
 	if err != nil {

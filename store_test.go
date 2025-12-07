@@ -239,8 +239,8 @@ func TestBufferDeduplication(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		FlushInterval: time.Hour,
-		MaxBufferBytes:   10000, // Large enough to hold multiple operations
+		FlushInterval:  time.Hour,
+		MaxBufferBytes: 10000, // Large enough to hold multiple operations
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {
@@ -288,8 +288,8 @@ func TestWALReplayWithBuffer(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	config := &Config{
-		FlushInterval: time.Hour,
-		MaxBufferBytes:   1000,
+		FlushInterval:  time.Hour,
+		MaxBufferBytes: 1000,
 	}
 	db, err := OpenWithConfig(dbPath, config)
 	if err != nil {

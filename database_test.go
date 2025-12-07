@@ -9,9 +9,9 @@ import (
 // TestUser for testing
 type TestUser struct {
 	UUID  string `nnut:"key"`
-	Name  string `nnut:"index:name"`
-	Email string `nnut:"index:email"`
-	Age   int    `nnut:"index:age"`
+	Name  string `nnut:"index"`
+	Email string `nnut:"index"`
+	Age   int    `nnut:"index"`
 }
 
 func TestOpen(t *testing.T) {

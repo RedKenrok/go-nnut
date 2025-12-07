@@ -135,7 +135,7 @@ func TestQuerySorting(t *testing.T) {
 
 	// Test ordering results using index
 	results, err := store.GetQuery(context.Background(), &Query{
-		Index: "name",
+		Index: "Name",
 		Sort:  Ascending,
 	})
 	if err != nil {
@@ -150,7 +150,7 @@ func TestQuerySorting(t *testing.T) {
 
 	// Query sorted by name descending
 	results, err = store.GetQuery(context.Background(), &Query{
-		Index: "name",
+		Index: "Name",
 		Sort:  Descending,
 	})
 	if err != nil {
@@ -193,7 +193,7 @@ func TestQueryLimitOffset(t *testing.T) {
 
 	// Test pagination with limit
 	results, err := store.GetQuery(context.Background(), &Query{
-		Index: "name",
+		Index: "Name",
 		Sort:  Ascending,
 		Limit: 2,
 	})
@@ -209,7 +209,7 @@ func TestQueryLimitOffset(t *testing.T) {
 
 	// Query with offset
 	results, err = store.GetQuery(context.Background(), &Query{
-		Index:  "name",
+		Index:  "Name",
 		Sort:   Ascending,
 		Offset: 1,
 		Limit:  2,
