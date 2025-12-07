@@ -9,7 +9,8 @@ const (
 	MaxBucketNameLength = 255
 )
 
-// Store represents a typed bucket
+// Store represents a typed bucket for storing and retrieving values of type T.
+// It provides type-safe operations with automatic indexing and serialization.
 type Store[T any] struct {
 	database    *DB
 	bucket      []byte
@@ -18,7 +19,10 @@ type Store[T any] struct {
 	fieldMap    map[string]int // field name -> field index
 }
 
-// NewStore creates a new store for type T with the given bucket name
+// NewStore creates a new store for type T with the given bucket name.
+// It analyzes the struct tags of T to set up key fields and indexes.
+// The type T must have exactly one field tagged with `nnut:"key"` of type string.
+// Fields tagged with `nnut:"index"` will be automatically indexed for efficient querying.
 func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 	// Validate bucket name
 	if bucketName == "" {
@@ -91,7 +95,7 @@ func (s *Store[T]) extractIndexValues(value T) map[string]string {
 	return result
 }
 
-// validateKey checks if a key is valid
+// Checks if a key is valid
 func validateKey(key string) error {
 	if key == "" {
 		return InvalidKeyError{Key: key}

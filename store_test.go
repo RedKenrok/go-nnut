@@ -8,6 +8,90 @@ import (
 	"time"
 )
 
+// ExampleNewStore demonstrates creating a typed store for a struct.
+func ExampleNewStore() {
+	type User struct {
+		ID    string `nnut:"key"`
+		Name  string `nnut:"index"`
+		Email string `nnut:"index"`
+	}
+
+	db, err := Open("mydata.db")
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	_, err = NewStore[User](db, "users")
+	if err != nil {
+		panic(err)
+	}
+}
+
+// ExampleStore_Put demonstrates storing a record.
+func ExampleStore_Put() {
+	type User struct {
+		ID   string `nnut:"key"`
+		Name string
+	}
+
+	db, _ := Open("mydata.db")
+	defer db.Close()
+
+	store, _ := NewStore[User](db, "users")
+
+	user := User{ID: "123", Name: "Alice"}
+	err := store.Put(context.Background(), user)
+	if err != nil {
+		panic(err)
+	}
+}
+
+// ExampleStore_Get demonstrates retrieving a record.
+func ExampleStore_Get() {
+	type User struct {
+		ID   string `nnut:"key"`
+		Name string
+	}
+
+	db, _ := Open("mydata.db")
+	defer db.Close()
+
+	store, _ := NewStore[User](db, "users")
+
+	user, err := store.Get(context.Background(), "123")
+	if err != nil {
+		panic(err)
+	}
+	_ = user // use user
+}
+
+// ExampleStore_GetQuery demonstrates querying records.
+func ExampleStore_GetQuery() {
+	type User struct {
+		ID    string `nnut:"key"`
+		Name  string `nnut:"index"`
+		Email string
+	}
+
+	db, _ := Open("mydata.db")
+	defer db.Close()
+
+	store, _ := NewStore[User](db, "users")
+
+	// Query users by name
+	query := &Query{
+		Conditions: []Condition{
+			{Field: "Name", Value: "Alice"},
+		},
+	}
+	users, err := store.GetQuery(context.Background(), query)
+	if err != nil {
+		panic(err)
+	}
+	_ = users // use users
+}
+
 func TestNewStore(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")

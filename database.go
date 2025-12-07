@@ -14,15 +14,27 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-// Config holds configuration options
+// Config holds configuration options for the database.
 type Config struct {
-	FlushInterval    time.Duration
-	WALPath          string
-	MaxBufferBytes   int
-	FlushChannelSize int // Size of the flush channel buffer (default 10)
+	// FlushInterval specifies how often the WAL is flushed to disk.
+	// Default is 15 minutes.
+	FlushInterval time.Duration
+
+	// WALPath is the file path for the Write-Ahead Log.
+	// If empty, defaults to dbPath + ".wal".
+	WALPath string
+
+	// MaxBufferBytes is the maximum size of the in-memory buffer before forcing a flush.
+	// Default is 10MB.
+	MaxBufferBytes int
+
+	// FlushChannelSize is the size of the flush channel buffer.
+	// Default is 10.
+	FlushChannelSize int
 }
 
-// DB wraps bbolt.DB
+// DB represents a database instance with WAL support.
+// It wraps bbolt.DB and adds Write-Ahead Logging for improved durability.
 type DB struct {
 	*bbolt.DB
 	config *Config
@@ -59,7 +71,8 @@ type walEntry struct {
 	Checksum  uint32
 }
 
-// Open opens a database with default config
+// Open opens a database at the given path with default configuration.
+// It creates a WAL file at path + ".wal" and uses sensible defaults for buffering.
 func Open(path string) (*DB, error) {
 	config := &Config{
 		FlushInterval:    time.Minute * 15,
@@ -90,7 +103,8 @@ func validateConfig(config *Config) error {
 	return nil
 }
 
-// OpenWithConfig opens a database with config
+// OpenWithConfig opens a database at the given path with custom configuration.
+// The config parameter allows customization of WAL behavior, buffer sizes, and flush intervals.
 func OpenWithConfig(path string, config *Config) (*DB, error) {
 	if config != nil && config.WALPath == "" {
 		config.WALPath = path + ".wal"
@@ -233,7 +247,9 @@ func (db *DB) replayWAL() error {
 				}
 			}
 
-			// Maintain index consistency during replay
+			// Maintain index consistency during replay.
+			// Since indexes are derived from data, we must update them as we replay operations
+			// to ensure the database state matches what it would have been without the crash.
 			for _, idxOp := range operation.IndexOperations {
 				idxBucketName := string(operation.Bucket) + "_index_" + idxOp.IndexName
 				idxB, err := tx.CreateBucketIfNotExists([]byte(idxBucketName))
@@ -286,6 +302,8 @@ func (db *DB) flushWAL() {
 	}
 }
 
+// Flush forces an immediate flush of the WAL buffer to disk.
+// This ensures all pending operations are persisted to the database.
 func (db *DB) Flush() {
 	db.operationsBufferMutex.Lock()
 	operations := make([]operation, 0, len(db.operationsBuffer))

@@ -8,7 +8,8 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-// Get retrieves a value by key
+// Get retrieves a single record by its key.
+// Returns the zero value of T and an error if the key is not found.
 func (s *Store[T]) Get(ctx context.Context, key string) (T, error) {
 	if err := validateKey(key); err != nil {
 		var zero T
@@ -62,7 +63,9 @@ func (s *Store[T]) Get(ctx context.Context, key string) (T, error) {
 	return result, err
 }
 
-// GetBatch retrieves multiple values by keys
+// GetBatch retrieves multiple records by their keys.
+// Returns a map of found records. Missing keys are not included in the map.
+// If some keys fail to decode, returns a PartialBatchError.
 func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, error) {
 	for _, key := range keys {
 		if err := validateKey(key); err != nil {
@@ -142,7 +145,8 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 	return results, err
 }
 
-// GetQuery queries for records matching the conditions
+// GetQuery retrieves records matching the given query conditions.
+// Supports filtering, sorting, pagination, and indexing for efficient queries.
 func (s *Store[T]) GetQuery(ctx context.Context, query *Query) ([]T, error) {
 	if err := s.validateQuery(query); err != nil {
 		return nil, err

@@ -1,19 +1,18 @@
 # nnut
 
-> Still very much a work in progress, the documentation is severely outdated.
-
 A Go library that wraps [go.etcd.io/bbolt](https://github.com/etcd-io/bbolt/#readme) to provide enhanced embedded key-value storage capabilities. It adds a Write Ahead Log (WAL) to reduce write frequency and implements automatic encoding using [msgpack](github.com/vmihailenco/msgpack/#readme) and indexing.
 
 ## Features
 
-- **bbolt wrapper**: Builds on top of the reliable bbolt database for embedded key-value storage;
-- **Write Ahead Log (WAL)**: Reduces disk write frequency by buffering changes in a log before committing to the database;
-- **Automatic indices**: Maintains and updates indices automatically as data is inserted, updated, or deleted;
-<!--- **Automatic encryption**: Marked fields are automatically encrypted when inserted, updated, or deleted and decrypted when retrieved.-->
+- **bbolt wrapper**: Builds on top of the reliable bbolt database for embedded key-value storage
+- **Write Ahead Log (WAL)**: Reduces disk write frequency by buffering changes in a log before committing to the database
+- **Automatic indices**: Maintains and updates indices automatically as data is inserted, updated, or deleted
+- **Type-safe operations**: Uses Go generics for compile-time type checking
+- **Efficient querying**: Supports filtering, sorting, and pagination with indexed fields
 
 ## Installation
 
-```bash
+```sh
 go get github.com/redkenrok/go-nnut
 ```
 
@@ -22,28 +21,24 @@ go get github.com/redkenrok/go-nnut
 The library supports various configuration options for customization:
 
 ```go
-import "github.com/redkenrok/nnut"
+import "github.com/redkenrok/go-nnut"
 
 config := &nnut.Config{
-  WALFlushInterval: time.Minute * 15, // Flushes every 15 minutes
-  BBoltOptions: &bolt.Options{
-    Timeout: time.Second * 10,
-    ReadOnly: false,
-  },
+  FlushInterval:    time.Minute * 15, // Flushes every 15 minutes
+  MaxBufferBytes:   10 * 1024 * 1024, // 10MB buffer
+  WALPath:          "mydata.db.wal",  // Custom WAL path
 }
 
 db, err := nnut.OpenWithConfig("mydata.db", config)
 if err != nil {
-  log.Fatal(err)
+   log.Fatal(err)
 }
 ```
-<!--EncryptionAlgorithm: "your-encryption-algorithm",
-EncryptionKey: []byte("your-32-byte-encryption-key"),  -->
 
-<!--- **EncryptionAlgorithm**: [...]
-- **EncryptionKey**: 32-byte key for encrypting marked fields-->
-- **WALFlushInterval**: How often to flush WAL to disk
-- **BBoltOptions**: Standard bbolt database options (timeout, read-only mode, etc.)
+- **FlushInterval**: How often to flush WAL to disk (default: 15 minutes)
+- **MaxBufferBytes**: Maximum size of in-memory buffer before forcing flush (default: 10MB)
+- **WALPath**: File path for the Write-Ahead Log (default: dbPath + ".wal")
+- **FlushChannelSize**: Size of the flush channel buffer (default: 10)
 
 ## Usage
 
@@ -53,8 +48,9 @@ First you define your Go structs with special tags to specify additional data su
 
 ```go
 type User struct {
-  UUID  string `nnut:"key"`
-  Email string
+   UUID  string `nnut:"key"`
+   Name  string `nnut:"index"`
+   Email string `nnut:"index"`
 }
 ```
 
@@ -81,25 +77,26 @@ You can then perform type-safe create, read, update, and delete operations.
 ```go
 // Create or update a user record
 user := User{
- 	UUID: "aa0000a0...",
- 	Email: "ron@example.com",
+  	UUID: "aa0000a0...",
+  	Name: "Ron",
+  	Email: "ron@example.com",
 }
-err = userStore.Put(user)
+err = userStore.Put(context.Background(), user)
 if err != nil {
-  log.Fatal(err)
+   log.Fatal(err)
 }
 
 // Read a user by primary key
-user, err = userStore.Get("aa0000a0...")
+user, err = userStore.Get(context.Background(), "aa0000a0...")
 if err != nil {
-  log.Fatal(err)
+   log.Fatal(err)
 }
 log.Printf("User: %+v", user)
 
 // Delete a user by primary key
-err = userStore.Delete("aa0000a0...")
+err = userStore.Delete(context.Background(), "aa0000a0...")
 if err != nil {
-  log.Fatal(err)
+   log.Fatal(err)
 }
 ```
 
@@ -110,27 +107,27 @@ For better performance with multiple operations, use batch methods instead.
 ```go
 // Batch put multiple users
 users := []User{
-  {UUID: "uuid1", Email: "user1@example.com"},
-  {UUID: "uuid2", Email: "user2@example.com"},
+   {UUID: "uuid1", Name: "Alice", Email: "user1@example.com"},
+   {UUID: "uuid2", Name: "Bob", Email: "user2@example.com"},
 }
-err = userStore.PutBatch(users)
+err = userStore.PutBatch(context.Background(), users)
 if err != nil {
-  log.Fatal(err)
+   log.Fatal(err)
 }
 
 // Batch get by keys
-users, err = userStore.GetBatch([]string{"uuid1", "uuid2"})
+users, err = userStore.GetBatch(context.Background(), []string{"uuid1", "uuid2"})
 if err != nil {
-  log.Fatal(err)
+   log.Fatal(err)
 }
 for _, user := range users {
-  log.Printf("User: %+v", user)
+   log.Printf("User: %+v", user)
 }
 
 // Batch delete by keys
-err = userStore.DeleteBatch([]string{"uuid1", "uuid2"})
+err = userStore.DeleteBatch(context.Background(), []string{"uuid1", "uuid2"})
 if err != nil {
-  log.Fatal(err)
+   log.Fatal(err)
 }
 ```
 
@@ -140,26 +137,27 @@ You can specify indexes on the data structure and the typed container will autom
 
 ```go
 type User struct {
-  UUID  string `nnut:"key"`
-  Email string `nnut:"index:email"`
+   UUID  string `nnut:"key"`
+   Name  string `nnut:"index"`
+   Email string `nnut:"index"`
 }
 
 [...]
 
-// Query users in alphabetical order of their email adresses
+// Query users sorted by name
 query := &nnut.Query{
-  Index: "Email",
-  Offset: 0,
-  Limit: 48,
-  Sort: nnut.Ascending, // or nnut.Descending to iterate in reverse alphabetical order
+   Index: "Name",
+   Offset: 0,
+   Limit: 48,
+   Sort: nnut.Ascending, // or nnut.Descending
 }
 
-users, err := userStore.Query(query)
+users, err := userStore.GetQuery(context.Background(), query)
 if err != nil {
-  log.Fatal(err)
+   log.Fatal(err)
 }
 for _, user := range users {
-  log.Printf("User: %+v", user)
+   log.Printf("User: %+v", user)
 }
 ```
 
@@ -174,7 +172,7 @@ query := &nnut.Query{
     {Field: "Email", Value: "ron@example.com"},
   },
 }
-users, err := userStore.Query(query)
+users, err := userStore.GetQuery(context.Background(), query)
 if err != nil {
   log.Fatal(err)
 }
@@ -194,7 +192,7 @@ query := &nnut.Query{
 	},
 }
 
-users, err := userStore.Query(query)
+users, err := userStore.GetQuery(context.Background(), query)
 if err != nil {
   log.Fatal(err)
 }
@@ -217,52 +215,81 @@ To get the number of records matching a query without retrieving the data:
 ```go
 // Count users with a specific age
 query := &nnut.Query{
-  Conditions: []nnut.Condition{
-    {Field: "Age", Value: 28},
-  },
+   Conditions: []nnut.Condition{
+      {Field: "Age", Value: 28},
+   },
 }
-count, err := userStore.QueryCount(query)
+count, err := userStore.CountQuery(context.Background(), query)
 if err != nil {
   log.Fatal(err)
 }
-log.Printf("Found %d users with that email", count)
-```
+ log.Printf("Found %d users with that email", count)
+ ```
 
-<!--
-### Encryption
+### Delete with queries
 
-Status: planned
-
-To store information securily fields can be marked as encrypted. The field will then automatically be encrypted before storing and decrypted when retrieved.
+You can delete records matching query conditions:
 
 ```go
-type User struct {
-	UUID  string `nnut:"key"`
-	Email string `nnut:"index:email"`
-  Name  string `nnut:"encrypt"`
+// Delete users older than 30
+query := &nnut.Query{
+   Conditions: []nnut.Condition{
+      {Field: "Age", Value: 30, Operator: nnut.GreaterThanOrEqual},
+   },
 }
-````
+deletedCount, err := userStore.DeleteQuery(context.Background(), query)
+if err != nil {
+   log.Fatal(err)
+}
+log.Printf("Deleted %d users", deletedCount)
+```
 
-To ensure the same data does not encrypt to the same value when it appears in multiple records a salt can be specified. This should reference the name of another field containing the salt value. This will be added during the encryption to ensure no two entries are alike. Do keep in mind that salted fields can **not** be indexed.
+## Error Handling
+
+The library returns specific error types for different failure scenarios:
 
 ```go
-type User struct {
- 	UUID  string `nnut:"key"`
- 	Email string `nnut:"index:email"`
-  Name  string `nnut:"encrypt:Salt"`
-  Salt  string
+user, err := userStore.Get(context.Background(), "nonexistent-key")
+if err != nil {
+   switch e := err.(type) {
+   case nnut.KeyNotFoundError:
+      log.Printf("Key not found: %s", e.Key)
+   case nnut.InvalidKeyError:
+      log.Printf("Invalid key: %s", e.Key)
+   default:
+      log.Printf("Other error: %v", err)
+   }
 }
 ```
 
-The salt value is also automatically filled in if left empty and it needs to be used for encryption.
--->
+Common errors:
+- **KeyNotFoundError**: Key does not exist
+- **InvalidKeyError**: Key is empty or too long
+- **BucketNotFoundError**: Bucket doesn't exist
+- **InvalidQueryError**: Query parameters are invalid
+- **PartialBatchError**: Some operations in a batch failed
+
+## WAL and Recovery
+
+The Write-Ahead Log ensures data durability by buffering operations in memory and periodically flushing to disk. In case of a crash, the WAL is automatically replayed on next open to restore any lost operations.
+
+```go
+// WAL is handled automatically - no special code needed
+db, err := nnut.Open("mydata.db")
+// On open, WAL is replayed if needed
+```
 
 ## Benchmarks
 
+Run benchmarks with:
+
+```sh
+go test -bench=. -benchtime=5s -benchmem
 ```
-~ go test -bench=. -benchtime=5s -benchmem
-2025/12/06 14:56:47 Error reading WAL for truncation: open test.db.wal: no such file or directory
-2025/12/06 14:56:47 Error reading WAL for truncation: open test.db.wal: no such file or directory
+
+Example output (results may vary by hardware):
+
+```
 goos: darwin
 goarch: amd64
 pkg: github.com/redkenrok/go-nnut

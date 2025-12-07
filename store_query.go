@@ -40,18 +40,27 @@ const (
 	Descending
 )
 
+// Condition represents a filter condition for queries.
+// Field is the name of the field to filter on.
+// Value is the value to compare against.
+// Operator specifies the comparison type (Equals, GreaterThan, etc.).
 type Condition struct {
 	Field    string
 	Value    interface{}
 	Operator Operator
 }
 
+// Query defines parameters for retrieving records from the store.
+// Index specifies which field to use for sorting (must be an indexed field).
+// Limit restricts the number of results (0 means no limit).
+// Offset skips the first N results.
+// Sort specifies ascending or descending order.
+// Conditions is a list of filters to apply.
 type Query struct {
-	Index  string
-	Limit  int // Maximum number of results to return (0 = no limit)
-	Offset int // Number of results to skip
-	Sort   Sorting
-
+	Index      string
+	Limit      int
+	Offset     int
+	Sort       Sorting
 	Conditions []Condition
 }
 

@@ -6,7 +6,8 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-// Count returns the total number of items in the store
+// Count returns the total number of records in the store.
+// Accounts for buffered operations that haven't been flushed yet.
 func (s *Store[T]) Count(ctx context.Context) (int, error) {
 	var count int
 	select {
@@ -39,7 +40,9 @@ func (s *Store[T]) Count(ctx context.Context) (int, error) {
 	return count, err
 }
 
-// CountQuery returns the number of records matching the query
+// CountQuery returns the number of records matching the query conditions.
+// More efficient than GetQuery when only the count is needed.
+// Supports the same query options as GetQuery.
 func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 	if err := s.validateQuery(query); err != nil {
 		return 0, err

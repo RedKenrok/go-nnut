@@ -8,7 +8,9 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-// Persist a single record with index updates
+// Put stores a single record in the database.
+// It automatically updates any indexes associated with the record.
+// The record's key field must be set and valid.
 func (s *Store[T]) Put(ctx context.Context, value T) error {
 	// Retrieve the primary key via runtime type inspection
 	valueReflection := reflect.ValueOf(value)
@@ -58,7 +60,9 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 	return s.database.writeOperation(ctx, operation)
 }
 
-// Persist multiple records efficiently
+// PutBatch stores multiple records in a single batch operation.
+// This is more efficient than calling Put multiple times.
+// All records must have valid keys set.
 func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 	// Collect primary keys from all values
 	keys := make([]string, len(values))

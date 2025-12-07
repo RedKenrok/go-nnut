@@ -8,7 +8,8 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-// Delete removes a value by key
+// Delete removes a single record by its key.
+// Automatically updates indexes to remove references to the deleted record.
 func (s *Store[T]) Delete(ctx context.Context, key string) error {
 	if err := validateKey(key); err != nil {
 		return err
@@ -46,7 +47,9 @@ func (s *Store[T]) Delete(ctx context.Context, key string) error {
 	return s.database.writeOperation(ctx, operation)
 }
 
-// DeleteBatch removes multiple values by keys
+// DeleteBatch removes multiple records by their keys.
+// More efficient than calling Delete multiple times.
+// Automatically updates indexes for all deleted records.
 func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 	// Fetch current values to handle index updates in batch
 	oldValues, err := s.GetBatch(ctx, keys)
@@ -91,7 +94,9 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 	return s.database.writeOperations(ctx, operations)
 }
 
-// DeleteQuery deletes records matching the query conditions and returns the count of deleted records
+// DeleteQuery deletes records matching the query conditions.
+// Returns the number of records deleted.
+// Supports the same query options as GetQuery for filtering and pagination.
 func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 	if err := s.validateQuery(query); err != nil {
 		return 0, err

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestUser for testing
@@ -12,6 +13,30 @@ type TestUser struct {
 	Name  string `nnut:"index"`
 	Email string `nnut:"index"`
 	Age   int    `nnut:"index"`
+}
+
+// ExampleOpen demonstrates opening a database with default configuration.
+func ExampleOpen() {
+	db, err := Open("mydata.db")
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+	// Use db...
+}
+
+// ExampleOpenWithConfig demonstrates opening a database with custom configuration.
+func ExampleOpenWithConfig() {
+	config := &Config{
+		FlushInterval:  10 * time.Minute,
+		MaxBufferBytes: 5 * 1024 * 1024, // 5MB
+	}
+	db, err := OpenWithConfig("mydata.db", config)
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+	// Use db...
 }
 
 func TestOpen(t *testing.T) {
