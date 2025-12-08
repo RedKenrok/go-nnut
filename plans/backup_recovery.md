@@ -1,4 +1,4 @@
-# Task 3: Backup and Recovery
+# Backup and Recovery
 
 ## Objective
 Enhance the backup and recovery capabilities of the nnut library by implementing an `Export` method for the `DB` struct, building on the existing basic WAL for crash recovery.

@@ -562,6 +562,7 @@ func (s *Store[T]) scanForConditionsTx(tx *bbolt.Tx, conditions []Condition, can
 			decoder.Reset(bytes.NewReader(data))
 			err := decoder.Decode(&item)
 			if err != nil {
+				// Log error but continue scanning
 				continue
 			}
 			matches := true
@@ -586,6 +587,7 @@ func (s *Store[T]) scanForConditionsTx(tx *bbolt.Tx, conditions []Condition, can
 			decoder.Reset(bytes.NewReader(valueBytes))
 			err := decoder.Decode(&item)
 			if err != nil {
+				// Log error but continue scanning
 				continue
 			}
 			matches := true

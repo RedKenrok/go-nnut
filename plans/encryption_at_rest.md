@@ -1,4 +1,4 @@
-# Task 6: Encryption at Rest
+# Encryption at Rest
 
 ## Objective
 Implement full encryption of WAL and DB data at rest using AES, providing comprehensive data protection for stored information.

@@ -1,4 +1,4 @@
-# Task 5: Value Encryption
+# Value Encryption
 
 ## Objective
 Add support for automatic encryption of specific fields in stored structs using `nnut:"encrypt"` tags, enhancing data security at the field level.

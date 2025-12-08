@@ -1,4 +1,4 @@
-# Task 4: Integrity Enhancement
+# Integrity Enhancement
 
 ## Objective
 Implement an `IntegrityCheck` method for the `DB` struct to verify DB/WAL consistency, ensuring data integrity and aiding in debugging corruption issues.

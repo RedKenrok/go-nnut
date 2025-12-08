@@ -14,6 +14,8 @@ func (s *Store[T]) Delete(ctx context.Context, key string) error {
 	if err := validateKey(key); err != nil {
 		return err
 	}
+
+	s.database.Logger().Debugf("Deleting record with key %s from bucket %s", key, s.bucket)
 	// Retrieve existing value to update indexes correctly
 	var oldIndexValues map[string]string
 	oldValue, err := s.Get(ctx, key)
@@ -51,6 +53,7 @@ func (s *Store[T]) Delete(ctx context.Context, key string) error {
 // More efficient than calling Delete multiple times.
 // Automatically updates indexes for all deleted records.
 func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
+	s.database.Logger().Debugf("Deleting batch of %d records from bucket %s", len(keys), s.bucket)
 	// Fetch current values to handle index updates in batch
 	oldValues, err := s.GetBatch(ctx, keys)
 	if err != nil {
@@ -149,6 +152,7 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 			decoder.Reset(bytes.NewReader(data))
 			err := decoder.Decode(&item)
 			if err != nil {
+				s.database.Logger().Errorf("Failed to decode value for key %s in bucket %s during delete query: %v", key, s.bucket, err)
 				continue
 			}
 			// Delete the record

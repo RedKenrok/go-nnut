@@ -31,6 +31,15 @@ type Config struct {
 	// FlushChannelSize is the size of the flush channel buffer.
 	// Default is 10.
 	FlushChannelSize int
+
+	// Logger is the logger used for both nnut and underlying bbolt operations.
+	// If nil, bbolt's default discard logger is used.
+	// This enables integration with bbolt's logging system for consistent logging across the bbolt ecosystem.
+	Logger bbolt.Logger
+
+	// BoltOptions contains bbolt-specific options that are passed to the underlying bbolt database.
+	// This allows full configuration control over bbolt's behavior including timeouts, sync options, etc.
+	BoltOptions *bbolt.Options
 }
 
 // DB represents a database instance with WAL support.
@@ -38,6 +47,7 @@ type Config struct {
 type DB struct {
 	*bbolt.DB
 	config *Config
+	logger *bbolt.Logger
 
 	walFile               *os.File
 	walMutex              sync.Mutex
@@ -70,6 +80,10 @@ type walEntry struct {
 	Operation operation
 	Checksum  uint32
 }
+
+var (
+	discardLogger = &bbolt.DefaultLogger{Logger: log.New(io.Discard, "", 0)}
+)
 
 // Open opens a database at the given path with default configuration.
 // It creates a WAL file at path + ".wal" and uses sensible defaults for buffering.
@@ -119,23 +133,40 @@ func OpenWithConfig(path string, config *Config) (*DB, error) {
 	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
-	if config != nil && config.WALPath == "" {
-		config.WALPath = path + ".wal"
-	}
-	if config != nil && config.MaxBufferBytes == 0 {
-		config.MaxBufferBytes = 10 * 1024 * 1024 // 10MB
+
+	// Create bbolt options from config
+	var bboltOptions *bbolt.Options
+	if config != nil && config.BoltOptions != nil {
+		bboltOptions = config.BoltOptions
+	} else {
+		bboltOptions = &bbolt.Options{}
 	}
 
-	if err := validateConfig(config); err != nil {
-		return nil, err
+	// Set logger for bbolt if provided
+	var logger bbolt.Logger
+	if config == nil || config.Logger == nil {
+		logger = discardLogger
+	} else {
+		logger = config.Logger
 	}
-	database, err := bbolt.Open(path, 0600, nil)
+	if bboltOptions.Logger == nil {
+		bboltOptions.Logger = logger
+	}
+
+	// Log database opening
+	logger.Info("Opening nnut database at path: %s", path)
+
+	database, err := bbolt.Open(path, 0600, bboltOptions)
 	if err != nil {
+		if config != nil {
+			logger.Errorf("Failed to open nnut database at path %s: %v", path, err)
+		}
 		return nil, FileSystemError{Path: path, Operation: "open", Err: err}
 	}
 	databaseInstance := &DB{
 		DB:               database,
 		config:           config,
+		logger:           &logger,
 		operationsBuffer: make(map[string]operation),
 		currentEpoch:     1,
 		flushChannel:     make(chan struct{}, config.FlushChannelSize),
@@ -143,11 +174,14 @@ func OpenWithConfig(path string, config *Config) (*DB, error) {
 	}
 
 	// Recover uncommitted operations from previous session to ensure data consistency
+	databaseInstance.Logger().Info("Replaying WAL from path: %s", config.WALPath)
 	err = databaseInstance.replayWAL()
 	if err != nil {
+		databaseInstance.Logger().Errorf("Failed to replay WAL from path %s: %v", config.WALPath, err)
 		database.Close()
 		return nil, err
 	}
+	databaseInstance.Logger().Info("Successfully replayed WAL from path: %s", config.WALPath)
 
 	// Prepare WAL file for logging new operations to enable crash recovery
 	databaseInstance.walFile, err = os.OpenFile(config.WALPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -180,6 +214,13 @@ func (db *DB) getBufferedOperationsForBucket(bucket []byte) []operation {
 		}
 	}
 	return ops
+}
+
+func (db *DB) Logger() bbolt.Logger {
+	if db == nil || db.logger == nil {
+		return discardLogger
+	}
+	return *db.logger
 }
 
 func (db *DB) replayWAL() error {
@@ -215,14 +256,14 @@ func (db *DB) replayWAL() error {
 		opEncoder := msgpack.NewEncoder(&opBuf)
 		err = opEncoder.Encode(entry.Operation)
 		if err != nil {
-			log.Printf("Error re-encoding operation for checksum: %v", err)
+			db.Logger().Errorf("Error re-encoding operation for checksum: %v", err)
 			os.Remove(db.config.WALPath)
 			break
 		}
 		encodedOp := opBuf.Bytes()
 		computedChecksum := crc32.ChecksumIEEE(encodedOp)
 		if computedChecksum != entry.Checksum {
-			log.Printf("WAL checksum mismatch at operation %d", operationIndex)
+			db.Logger().Errorf("WAL checksum mismatch at operation %d", operationIndex)
 			os.Remove(db.config.WALPath)
 			break
 		}
@@ -319,6 +360,8 @@ func (db *DB) Flush() {
 		return
 	}
 
+	db.Logger().Infof("Flushing %d operations to database", len(operations))
+
 	err := db.Update(func(tx *bbolt.Tx) error {
 		for _, operation := range operations {
 			b, err := tx.CreateBucketIfNotExists(operation.Bucket)
@@ -361,10 +404,11 @@ func (db *DB) Flush() {
 		return nil
 	})
 	if err != nil {
-		// Log flush errors for debugging, but don't fail the operation as operations remain in buffer for retry
-		log.Printf("Flush error: %v", FlushError{OperationCount: len(operations), Err: err})
+		db.Logger().Errorf("Flush error: %v", FlushError{OperationCount: len(operations), Err: err})
 		return
 	}
+
+	db.Logger().Infof("Successfully flushed %d operations to database", len(operations))
 
 	// Truncate WAL after successful flush
 	db.truncateWAL(db.currentEpoch)
@@ -377,18 +421,18 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 
 	// Close WAL file
 	if err := db.walFile.Close(); err != nil {
-		log.Printf("Error closing WAL for truncation: %v", err)
+		db.Logger().Errorf("Error closing WAL for truncation: %v", err)
 		return
 	}
 
 	// Read entire WAL
 	data, err := os.ReadFile(db.config.WALPath)
 	if err != nil {
-		log.Printf("Error reading WAL for truncation: %v", err)
+		db.Logger().Errorf("Error reading WAL for truncation: %v", err)
 		// Reopen WAL
 		db.walFile, err = os.OpenFile(db.config.WALPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
-			log.Printf("Error reopening WAL: %v", err)
+			db.Logger().Errorf("Error reopening WAL: %v", err)
 		}
 		return
 	}
@@ -405,7 +449,7 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 			if err == io.EOF {
 				break
 			}
-			log.Printf("Error decoding WAL entry: %v", err)
+			db.Logger().Errorf("Error decoding WAL entry: %v", err)
 			// On decode error, keep all remaining data
 			break
 		}
@@ -414,13 +458,13 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 		opEncoder := msgpack.NewEncoder(&opBuf)
 		err = opEncoder.Encode(entry.Operation)
 		if err != nil {
-			log.Printf("Error re-encoding operation for checksum: %v", err)
+			db.Logger().Errorf("Error re-encoding operation for checksum: %v", err)
 			continue
 		}
 		encodedOp := opBuf.Bytes()
 		computedChecksum := crc32.ChecksumIEEE(encodedOp)
 		if computedChecksum != entry.Checksum {
-			log.Printf("WAL checksum mismatch during truncation")
+			db.Logger().Errorf("WAL checksum mismatch during truncation")
 			continue
 		}
 		if entry.Operation.Epoch > committedEpoch {
@@ -433,11 +477,11 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 	encoder := msgpack.NewEncoder(&buf)
 	for _, op := range remainingOps {
 		if err := encoder.Encode(op); err != nil {
-			log.Printf("Error encoding remaining operation: %v", err)
+			db.Logger().Errorf("Error encoding remaining operation: %v", err)
 			// On error, don't truncate
 			db.walFile, err = os.OpenFile(db.config.WALPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 			if err != nil {
-				log.Printf("Error reopening WAL: %v", err)
+				db.Logger().Errorf("Error reopening WAL: %v", err)
 			}
 			return
 		}
@@ -446,11 +490,11 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 	// Write back to WAL
 	err = os.WriteFile(db.config.WALPath, buf.Bytes(), 0644)
 	if err != nil {
-		log.Printf("Error writing truncated WAL: %v", err)
+		db.Logger().Errorf("Error writing truncated WAL: %v", err)
 		// Reopen
 		db.walFile, err = os.OpenFile(db.config.WALPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
-			log.Printf("Error reopening WAL: %v", err)
+			db.Logger().Errorf("Error reopening WAL: %v", err)
 		}
 		return
 	}
@@ -458,7 +502,7 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 	// Reopen WAL for append
 	db.walFile, err = os.OpenFile(db.config.WALPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		log.Printf("Error reopening WAL after truncation: %v", err)
+		db.Logger().Errorf("Error reopening WAL after truncation: %v", err)
 	}
 }
 

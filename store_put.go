@@ -19,6 +19,8 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 		return err
 	}
 
+	s.database.Logger().Debugf("Putting record with key %s in bucket %s", key, s.bucket)
+
 	// Fetch existing record to handle index changes
 	var oldIndexValues map[string]string
 	oldValue, err := s.Get(ctx, key)
@@ -46,6 +48,7 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 
 	data, err := msgpack.Marshal(value)
 	if err != nil {
+		s.database.Logger().Errorf("Failed to marshal value for key %s in bucket %s: %v", key, s.bucket, err)
 		return WrappedError{Operation: "marshal", Bucket: string(s.bucket), Key: key, Err: err}
 	}
 
@@ -64,6 +67,7 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 // This is more efficient than calling Put multiple times.
 // All records must have valid keys set.
 func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
+	s.database.Logger().Debugf("Putting batch of %d records in bucket %s", len(values), s.bucket)
 	// Collect primary keys from all values
 	keys := make([]string, len(values))
 	keyToValue := make(map[string]T)
@@ -117,6 +121,7 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 		encoder := msgpack.NewEncoder(buf)
 		err = encoder.Encode(value)
 		if err != nil {
+			s.database.Logger().Errorf("Failed to encode value for key %s in bucket %s: %v", key, s.bucket, err)
 			return WrappedError{Operation: "encode", Bucket: string(s.bucket), Key: key, Err: err}
 		}
 		data := buf.Bytes()

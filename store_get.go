@@ -15,6 +15,8 @@ func (s *Store[T]) Get(ctx context.Context, key string) (T, error) {
 		var zero T
 		return zero, err
 	}
+
+	s.database.Logger().Debugf("Getting record with key %s from bucket %s", key, s.bucket)
 	var result T
 
 	// Check buffer for pending changes first
@@ -26,6 +28,7 @@ func (s *Store[T]) Get(ctx context.Context, key string) (T, error) {
 			decoder.Reset(bytes.NewReader(op.Value))
 			err := decoder.Decode(&result)
 			if err != nil {
+				s.database.Logger().Errorf("Failed to decode buffered value for key %s in bucket %s: %v", key, s.bucket, err)
 				return result, WrappedError{Operation: "decode buffered", Bucket: string(s.bucket), Key: key, Err: err}
 			}
 			return result, nil
@@ -56,6 +59,7 @@ func (s *Store[T]) Get(ctx context.Context, key string) (T, error) {
 		decoder.Reset(bytes.NewReader(data))
 		err := decoder.Decode(&result)
 		if err != nil {
+			s.database.Logger().Errorf("Failed to decode value for key %s in bucket %s: %v", key, s.bucket, err)
 			return WrappedError{Operation: "decode", Bucket: string(s.bucket), Key: key, Err: err}
 		}
 		return nil
@@ -72,6 +76,8 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 			return nil, err
 		}
 	}
+
+	s.database.Logger().Debugf("Getting batch of %d records from bucket %s", len(keys), s.bucket)
 	results := make(map[string]T)
 	failed := make(map[string]error)
 
@@ -85,6 +91,7 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 				bufferDecoder.Reset(bytes.NewReader(op.Value))
 				err := bufferDecoder.Decode(&item)
 				if err != nil {
+					s.database.Logger().Errorf("Failed to decode buffered value for key %s in bucket %s: %v", key, s.bucket, err)
 					failed[key] = WrappedError{Operation: "decode buffered", Bucket: string(s.bucket), Key: key, Err: err}
 					continue
 				}
@@ -124,6 +131,7 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 				decoder.Reset(bytes.NewReader(data))
 				err := decoder.Decode(&item)
 				if err != nil {
+					s.database.Logger().Errorf("Failed to decode value for key %s in bucket %s: %v", key, s.bucket, err)
 					// Collect decoding errors for individual items in batch
 					failed[key] = WrappedError{Operation: "decode", Bucket: string(s.bucket), Key: key, Err: err}
 					continue

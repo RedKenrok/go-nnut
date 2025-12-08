@@ -31,7 +31,7 @@ config := &nnut.Config{
 
 db, err := nnut.OpenWithConfig("mydata.db", config)
 if err != nil {
-   log.Fatal(err)
+  log.Fatal(err)
 }
 ```
 
@@ -39,6 +39,8 @@ if err != nil {
 - **MaxBufferBytes**: Maximum size of in-memory buffer before forcing flush (default: 10MB)
 - **WALPath**: File path for the Write-Ahead Log (default: dbPath + ".wal")
 - **FlushChannelSize**: Size of the flush channel buffer (default: 10)
+- **Logger**: Custom logger implementing bbolt.Logger interface for integrated logging
+- **BoltOptions**: Direct access to underlying bbolt.Options for advanced configuration
 
 ## Usage
 
@@ -244,40 +246,60 @@ if err != nil {
 log.Printf("Deleted %d users", deletedCount)
 ```
 
-## Error Handling
+## Logging
 
-The library returns specific error types for different failure scenarios:
+nnut integrates with bbolt's logging system to provide comprehensive logging support. You can configure custom logging to monitor database operations, debug issues, and track performance.
 
 ```go
-user, err := userStore.Get(context.Background(), "nonexistent-key")
-if err != nil {
-   switch e := err.(type) {
-   case nnut.KeyNotFoundError:
-      log.Printf("Key not found: %s", e.Key)
-   case nnut.InvalidKeyError:
-      log.Printf("Invalid key: %s", e.Key)
-   default:
-      log.Printf("Other error: %v", err)
-   }
+import (
+  "fmt"
+  "log"
+  "github.com/redkenrok/go-nnut"
+)
+
+// Create a custom logger (must implement bbolt.Logger interface)
+type customLogger struct {
+  *log.Logger
+}
+
+func (c *customLogger) Debug(v ...interface{}) { c.Printf("DEBUG: "+fmt.Sprint(v...)) }
+func (c *customLogger) Debugf(format string, v ...interface{}) { c.Printf("DEBUG: "+format, v...) }
+// ... implement other bbolt.Logger methods
+
+logger := &customLogger{log.New(os.Stdout, "nnut: ", log.LstdFlags)}
+
+// Configure nnut with logging
+config := &nnut.Config{
+  Logger: logger,
+  // ... other config options
+}
+
+db, err := nnut.OpenWithConfig("mydata.db", config)
+```
+
+### bbolt Options
+
+For advanced use cases, you can pass bbolt-specific options directly through the `BoltOptions` field:
+
+```go
+import (
+  "syscall"
+  "time"
+  "go.etcd.io/bbolt"
+)
+
+config := &nnut.Config{
+  Logger: &customLogger{log.New(os.Stdout, "nnut: ", log.LstdFlags)},
+  BoltOptions: &bbolt.Options{
+    Timeout:    time.Second * 5,
+    NoSync:     false,
+    MmapFlags:  syscall.MAP_POPULATE,
+    // ... other bbolt options
+  },
 }
 ```
 
-Common errors:
-- **KeyNotFoundError**: Key does not exist
-- **InvalidKeyError**: Key is empty or too long
-- **BucketNotFoundError**: Bucket doesn't exist
-- **InvalidQueryError**: Query parameters are invalid
-- **PartialBatchError**: Some operations in a batch failed
-
-## WAL and Recovery
-
-The Write-Ahead Log ensures data durability by buffering operations in memory and periodically flushing to disk. In case of a crash, the WAL is automatically replayed on next open to restore any lost operations.
-
-```go
-// WAL is handled automatically - no special code needed
-db, err := nnut.Open("mydata.db")
-// On open, WAL is replayed if needed
-```
+The logger will receive messages from both nnut operations (database opening, WAL replay, flushing, CRUD operations) and underlying bbolt operations (file operations, transactions).
 
 ## Benchmarks
 
