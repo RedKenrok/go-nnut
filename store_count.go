@@ -2,6 +2,7 @@ package nnut
 
 import (
 	"context"
+	"strings"
 
 	"go.etcd.io/bbolt"
 )
@@ -21,16 +22,27 @@ func (s *Store[T]) Count(ctx context.Context) (int, error) {
 			count = 0
 			return nil
 		}
-		count = bucket.Stats().KeyN
+
+		// Count only record keys, skip _btree_ metadata
+		cursor := bucket.Cursor()
+		for keyBytes, _ := cursor.First(); keyBytes != nil; keyBytes, _ = cursor.Next() {
+			key := string(keyBytes)
+			if !strings.HasPrefix(key, "_btree_") {
+				count++
+			}
+		}
 
 		// Adjust for buffered operations
-		bufferedOps := s.database.getBufferedOperationsForBucket(s.bucket)
-		for _, op := range bufferedOps {
-			// op.Key is the actual key
-			exists := bucket.Get([]byte(op.Key)) != nil
-			if op.IsPut && !exists {
+		bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
+		for _, operation := range bufferedOperations {
+			// Skip B-tree operations
+			if strings.HasPrefix(operation.Key, "_btree_") {
+				continue
+			}
+			exists := bucket.Get([]byte(operation.Key)) != nil
+			if operation.IsPut && !exists {
 				count++ // New key being added
-			} else if !op.IsPut && exists {
+			} else if !operation.IsPut && exists {
 				count-- // Existing key being deleted
 			}
 		}

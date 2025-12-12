@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/vmihailenco/msgpack/v5"
@@ -103,6 +104,36 @@ func (s *Store[T]) validateQuery(query *Query) error {
 	return nil
 }
 
+// getCandidateKeys returns keys that match all conditions
+func (s *Store[T]) getCandidateKeys(conditions []Condition, maxKeys int) []string {
+	var keys []string
+	s.database.View(func(tx *bbolt.Tx) error {
+		keys = s.getCandidateKeysTx(tx, conditions, maxKeys)
+		return nil
+	})
+	return keys
+}
+
+// getKeysFromIndex returns all keys sorted by the index
+func (s *Store[T]) getKeysFromIndex(index string, sorting Sorting, maxKeys int) []string {
+	var keys []string
+	s.database.View(func(tx *bbolt.Tx) error {
+		keys = s.getKeysFromIndexTx(tx, index, sorting, maxKeys)
+		return nil
+	})
+	return keys
+}
+
+// getAllKeys returns all keys in the store
+func (s *Store[T]) getAllKeys(maxKeys int) []string {
+	var keys []string
+	s.database.View(func(tx *bbolt.Tx) error {
+		keys = s.getAllKeysTx(tx, maxKeys)
+		return nil
+	})
+	return keys
+}
+
 // getCandidateKeysTx returns keys that match all conditions using the provided tx
 func (s *Store[T]) getCandidateKeysTx(tx *bbolt.Tx, conditions []Condition, maxKeys int) []string {
 	if len(conditions) == 0 {
@@ -192,100 +223,48 @@ func (s *Store[T]) getKeysForConditionTx(tx *bbolt.Tx, condition Condition, maxK
 		return keys
 	}
 
-	// Use index
-	indexBucketName := string(s.bucket) + "_index_" + condition.Field
-	indexBucket := tx.Bucket([]byte(indexBucketName))
-	if indexBucket == nil {
-		return keys
-	}
-	cursor := indexBucket.Cursor()
-	var keyBytes []byte
+	// Use B-tree index
+	var min, max string
+	var includeMin, includeMax bool
 	switch condition.Operator {
 	case Equals:
-		prefix := valueString + "\x00"
-		for keyBytes, _ = cursor.Seek([]byte(prefix)); keyBytes != nil && bytes.HasPrefix(keyBytes, []byte(prefix)); keyBytes, _ = cursor.Next() {
+		btreeKeys := s.btreeIndexes[condition.Field].Search(valueString)
+		for _, key := range btreeKeys {
 			if maxKeys > 0 && len(keys) >= maxKeys {
 				break
 			}
-			parts := bytes.SplitN(keyBytes, []byte("\x00"), 2)
-			if len(parts) == 2 {
-				key := string(parts[1])
-				keys = append(keys, key)
-			}
+			keys = append(keys, key)
 		}
+		return keys
 	case GreaterThan:
-		keyBytes, _ = cursor.Seek([]byte(valueString + "\x00"))
-		// Skip equals
-		for keyBytes != nil && bytes.HasPrefix(keyBytes, []byte(valueString+"\x00")) {
-			keyBytes, _ = cursor.Next()
-		}
-		// Now collect greater
-		for keyBytes != nil {
-			if maxKeys > 0 && len(keys) >= maxKeys {
-				break
-			}
-			parts := bytes.SplitN(keyBytes, []byte("\x00"), 2)
-			if len(parts) == 2 {
-				value := string(parts[0])
-				if value > valueString {
-					key := string(parts[1])
-					keys = append(keys, key)
-				} else {
-					break
-				}
-			}
-			keyBytes, _ = cursor.Next()
-		}
+		min = valueString
+		includeMin = false
+		max = ""
+		includeMax = true
 	case GreaterThanOrEqual:
-		for keyBytes, _ = cursor.Seek([]byte(valueString + "\x00")); keyBytes != nil; keyBytes, _ = cursor.Next() {
-			if maxKeys > 0 && len(keys) >= maxKeys {
-				break
-			}
-			parts := bytes.SplitN(keyBytes, []byte("\x00"), 2)
-			if len(parts) == 2 {
-				value := string(parts[0])
-				if value >= valueString {
-					key := string(parts[1])
-					keys = append(keys, key)
-				} else {
-					break
-				}
-			}
-		}
+		min = valueString
+		includeMin = true
+		max = ""
+		includeMax = true
 	case LessThan:
-		for keyBytes, _ = cursor.First(); keyBytes != nil; keyBytes, _ = cursor.Next() {
-			if maxKeys > 0 && len(keys) >= maxKeys {
-				break
-			}
-			parts := bytes.SplitN(keyBytes, []byte("\x00"), 2)
-			if len(parts) == 2 {
-				value := string(parts[0])
-				if value < valueString {
-					key := string(parts[1])
-					keys = append(keys, key)
-				} else {
-					break
-				}
-			}
-		}
+		min = ""
+		includeMin = true
+		max = valueString
+		includeMax = false
 	case LessThanOrEqual:
-		for keyBytes, _ = cursor.First(); keyBytes != nil; keyBytes, _ = cursor.Next() {
-			if maxKeys > 0 && len(keys) >= maxKeys {
-				break
-			}
-			parts := bytes.SplitN(keyBytes, []byte("\x00"), 2)
-			if len(parts) == 2 {
-				value := string(parts[0])
-				if value <= valueString {
-					key := string(parts[1])
-					keys = append(keys, key)
-				} else {
-					break
-				}
-			}
-		}
+		min = ""
+		includeMin = true
+		max = valueString
+		includeMax = true
 	}
-	sort.Strings(keys)
+
+	btreeKeys := s.btreeIndexes[condition.Field].RangeSearch(min, max, includeMin, includeMax)
+	for _, key := range btreeKeys {
+		if maxKeys > 0 && len(keys) >= maxKeys {
+			break
+		}
+		keys = append(keys, key)
+	}
 	return keys
 }
 
@@ -440,7 +419,12 @@ func (s *Store[T]) getAllKeysTx(tx *bbolt.Tx, maxKeys int) []string {
 		if maxKeys > 0 && len(keys) >= maxKeys {
 			break
 		}
-		keys = append(keys, string(keyBytes))
+		key := string(keyBytes)
+		// Skip B-tree metadata keys
+		if strings.HasPrefix(key, "_btree_") {
+			continue
+		}
+		keys = append(keys, key)
 	}
 	return keys
 }
@@ -462,81 +446,27 @@ func (s *Store[T]) countAllKeysTx(tx *bbolt.Tx) int {
 
 // getKeysFromIndexTx returns all keys sorted by the index
 func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sorting, maxKeys int) []string {
-	var keys []string
-	indexBucketName := string(s.bucket) + "_index_" + index
-	indexBucket := tx.Bucket([]byte(indexBucketName))
-	if indexBucket == nil {
-		return keys
-	}
-	cursor := indexBucket.Cursor()
-	var keyBytes []byte
+	keys := s.btreeIndexes[index].GetAllKeys()
 	if sorting == Descending {
-		for keyBytes, _ = cursor.Last(); keyBytes != nil && (maxKeys == 0 || len(keys) < maxKeys); keyBytes, _ = cursor.Prev() {
-			parts := bytes.SplitN(keyBytes, []byte("\x00"), 2)
-			if len(parts) == 2 {
-				key := string(parts[1])
-				keys = append(keys, key)
-			}
+		// Reverse the slice
+		for i, j := 0, len(keys)-1; i < j; i, j = i+1, j-1 {
+			keys[i], keys[j] = keys[j], keys[i]
 		}
-	} else {
-		for keyBytes, _ = cursor.First(); keyBytes != nil && (maxKeys == 0 || len(keys) < maxKeys); keyBytes, _ = cursor.Next() {
-			parts := bytes.SplitN(keyBytes, []byte("\x00"), 2)
-			if len(parts) == 2 {
-				key := string(parts[1])
-				keys = append(keys, key)
-			}
-		}
+	}
+	if maxKeys > 0 && len(keys) > maxKeys {
+		keys = keys[:maxKeys]
 	}
 	return keys
 }
 
 // countKeysFromIndexTx returns the count of keys in the index
 func (s *Store[T]) countKeysFromIndexTx(tx *bbolt.Tx, index string) int {
-	count := 0
-	indexBucketName := string(s.bucket) + "_index_" + index
-	indexBucket := tx.Bucket([]byte(indexBucketName))
-	if indexBucket == nil {
-		return count
-	}
-	cursor := indexBucket.Cursor()
-	for keyBytes, _ := cursor.First(); keyBytes != nil; keyBytes, _ = cursor.Next() {
-		count++
-	}
-	return count
+	return s.btreeIndexes[index].CountKeys()
 }
 
 // countUniqueValuesFromIndexTx returns the count of unique values in the index
 func (s *Store[T]) countUniqueValuesFromIndexTx(tx *bbolt.Tx, index string) int {
-	indexBucketName := string(s.bucket) + "_index_" + index
-	indexBucket := tx.Bucket([]byte(indexBucketName))
-	if indexBucket == nil {
-		return 0
-	}
-
-	cursor := indexBucket.Cursor()
-	var count int
-	var lastValue []byte
-
-	for keyBytes, _ := cursor.First(); keyBytes != nil; keyBytes, _ = cursor.Next() {
-		// Find the position of the null byte separator
-		nullPos := bytes.IndexByte(keyBytes, '\x00')
-		if nullPos == -1 {
-			continue // Malformed key, skip
-		}
-
-		// Extract the value part (everything before \x00)
-		currentValue := keyBytes[:nullPos]
-
-		// If this is the first value or different from the last one, increment count
-		if lastValue == nil || !bytes.Equal(currentValue, lastValue) {
-			count++
-			// Allocate a copy for comparison with next iteration
-			lastValue = make([]byte, len(currentValue))
-			copy(lastValue, currentValue)
-		}
-	}
-
-	return count
+	return s.btreeIndexes[index].CountUniqueValues()
 }
 
 // scanForConditionsTx scans records and returns keys matching all conditions

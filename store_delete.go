@@ -5,7 +5,7 @@ import (
 	"context"
 
 	"github.com/vmihailenco/msgpack/v5"
-	"go.etcd.io/bbolt"
+	bolt "go.etcd.io/bbolt"
 )
 
 // Delete removes a single record by its key.
@@ -25,25 +25,19 @@ func (s *Store[T]) Delete(ctx context.Context, key string) error {
 		oldIndexValues = make(map[string]string)
 	}
 
-	// Set up index removals for each deleted item
-	var indexOperations []indexOperation
+	// Update B-tree indexes
 	for name := range s.indexFields {
 		oldValue := oldIndexValues[name]
 		if oldValue != "" {
-			indexOperations = append(indexOperations, indexOperation{
-				IndexName: name,
-				OldValue:  oldValue,
-				NewValue:  "",
-			})
+			s.btreeIndexes[name].Delete(oldValue, key)
 		}
 	}
 
 	operation := operation{
-		Bucket:          s.bucket,
-		Key:             key,
-		Value:           nil,
-		IsPut:           false,
-		IndexOperations: indexOperations,
+		Bucket: s.bucket,
+		Key:    key,
+		Value:  nil,
+		IsPut:  false,
 	}
 
 	return s.database.writeOperation(ctx, operation)
@@ -71,27 +65,36 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 			oldIndexValues = make(map[string]string)
 		}
 
-		// Prepare index updates for deletion
-		var indexOperations []indexOperation
+		// Update B-tree indexes
 		for name := range s.indexFields {
 			oldValue := oldIndexValues[name]
 			if oldValue != "" {
-				indexOperations = append(indexOperations, indexOperation{
-					IndexName: name,
-					OldValue:  oldValue,
-					NewValue:  "",
-				})
+				s.btreeIndexes[name].Delete(oldValue, key)
 			}
 		}
 
 		operation := operation{
-			Bucket:          s.bucket,
-			Key:             key,
-			Value:           nil,
-			IsPut:           false,
-			IndexOperations: indexOperations,
+			Bucket: s.bucket,
+			Key:    key,
+			Value:  nil,
+			IsPut:  false,
 		}
 		operations = append(operations, operation)
+	}
+
+	// Add B-tree persistence operations to the batch
+	for fieldName, bt := range s.btreeIndexes {
+		data, err := bt.Serialize()
+		if err != nil {
+			return err
+		}
+		btreeOp := operation{
+			Bucket: s.bucket,
+			Key:    "_btree_" + fieldName,
+			Value:  data,
+			IsPut:  true,
+		}
+		operations = append(operations, btreeOp)
 	}
 
 	return s.database.writeOperations(ctx, operations)
@@ -111,66 +114,82 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 		return 0, ctx.Err()
 	default:
 	}
-	err := s.database.Update(func(tx *bbolt.Tx) error {
-		// Gather keys that potentially match the query conditions
-		var candidateKeys []string
-		if len(query.Conditions) > 0 {
-			candidateKeys = s.getCandidateKeysTx(tx, query.Conditions, 0)
-		} else if query.Index != "" {
-			// When no conditions but sorting is required, use the index directly
-			candidateKeys = s.getKeysFromIndexTx(tx, query.Index, query.Sort, 0)
-		} else {
-			// Fallback to scanning all keys when no optimizations apply
-			candidateKeys = s.getAllKeysTx(tx, 0)
-		}
 
-		// Apply offset and limit to candidate keys
-		start := query.Offset
-		if start > len(candidateKeys) {
-			start = len(candidateKeys)
-		}
-		end := len(candidateKeys)
-		if query.Limit > 0 && start+query.Limit < end {
-			end = start + query.Limit
-		}
-		keysToDelete := candidateKeys[start:end]
+	// Gather keys that potentially match the query conditions using B-trees
+	var candidateKeys []string
+	if len(query.Conditions) > 0 {
+		// Use B-tree based candidate selection
+		candidateKeys = s.getCandidateKeys(query.Conditions, 0)
+	} else if query.Index != "" {
+		// When no conditions but sorting is required, use the index directly
+		candidateKeys = s.getKeysFromIndex(query.Index, query.Sort, 0)
+	} else {
+		// Fallback to scanning all keys when no optimizations apply
+		candidateKeys = s.getAllKeys(0)
+	}
 
-		// Retrieve the actual data for the selected keys to get old index values
+	// Apply offset and limit to candidate keys
+	start := query.Offset
+	if start > len(candidateKeys) {
+		start = len(candidateKeys)
+	}
+	end := len(candidateKeys)
+	if query.Limit > 0 && start+query.Limit < end {
+		end = start + query.Limit
+	}
+	keysToDelete := candidateKeys[start:end]
+
+	// Perform deletions in a transaction for immediate consistency
+	err := s.database.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
 		if bucket == nil {
 			return BucketNotFoundError{Bucket: string(s.bucket)}
 		}
-		decoder := msgpack.GetDecoder()
-		defer msgpack.PutDecoder(decoder)
 
 		for _, key := range keysToDelete {
 			data := bucket.Get([]byte(key))
 			if data == nil {
 				continue
 			}
+
+			// Decode the record to update B-trees
 			var item T
+			decoder := msgpack.GetDecoder()
+			defer msgpack.PutDecoder(decoder)
 			decoder.Reset(bytes.NewReader(data))
 			err := decoder.Decode(&item)
 			if err != nil {
 				s.database.Logger().Errorf("Failed to decode value for key %s in bucket %s during delete query: %v", key, s.bucket, err)
 				continue
 			}
+
 			// Delete the record
 			if err := bucket.Delete([]byte(key)); err != nil {
 				continue
 			}
-			// Update indexes by removing old index entries
+
+			// Update B-trees by removing old index entries
 			oldIndexValues := s.extractIndexValues(item)
 			for indexName, value := range oldIndexValues {
-				indexBucketName := string(s.bucket) + "_index_" + indexName
-				indexBucket := tx.Bucket([]byte(indexBucketName))
-				if indexBucket != nil {
-					indexKey := value + "\x00" + key
-					indexBucket.Delete([]byte(indexKey))
+				if value != "" {
+					s.btreeIndexes[indexName].Delete(value, key)
 				}
 			}
 			deletedCount++
 		}
+
+		// Persist B-trees within the same transaction
+		for fieldName, bt := range s.btreeIndexes {
+			data, err := bt.Serialize()
+			if err != nil {
+				return err
+			}
+			err = bucket.Put([]byte("_btree_"+fieldName), data)
+			if err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 	if err != nil {

@@ -1,7 +1,11 @@
 package nnut
 
 import (
+	"bytes"
 	"reflect"
+
+	"github.com/vmihailenco/msgpack/v5"
+	bolt "go.etcd.io/bbolt"
 )
 
 const (
@@ -12,11 +16,12 @@ const (
 // Store represents a typed bucket for storing and retrieving values of type T.
 // It provides type-safe operations with automatic indexing and serialization.
 type Store[T any] struct {
-	database    *DB
-	bucket      []byte
-	keyField    int            // index of the field tagged with nnut:"key"
-	indexFields map[string]int // field name -> field index
-	fieldMap    map[string]int // field name -> field index
+	database     *DB
+	bucket       []byte
+	keyField     int                    // index of the field tagged with nnut:"key"
+	indexFields  map[string]int         // field name -> field index
+	fieldMap     map[string]int         // field name -> field index
+	btreeIndexes map[string]*BTree // field name -> B-tree index (new)
 }
 
 // NewStore creates a new store for type T with the given bucket name.
@@ -73,13 +78,26 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 		_ = fieldName // avoid unused variable
 	}
 
-	return &Store[T]{
-		database:    database,
-		bucket:      []byte(bucketName),
-		keyField:    keyFieldIndex,
-		indexFields: indexFields,
-		fieldMap:    fieldMap,
-	}, nil
+	btreeIndexes := make(map[string]*BTree)
+	for fieldName := range indexFields {
+		btreeIndexes[fieldName] = NewBTreeIndex(32) // default branching factor
+	}
+
+	store := &Store[T]{
+		database:     database,
+		bucket:       []byte(bucketName),
+		keyField:     keyFieldIndex,
+		indexFields:  indexFields,
+		fieldMap:     fieldMap,
+		btreeIndexes: btreeIndexes,
+	}
+
+	// Populate B-tree indexes from existing data
+	if err := store.populateBTreeIndexes(); err != nil {
+		return nil, err
+	}
+
+	return store, nil
 }
 
 // Gather index field values to maintain secondary index consistency
@@ -95,6 +113,50 @@ func (s *Store[T]) extractIndexValues(value T) map[string]string {
 	return result
 }
 
+// populateBTreeIndexes loads or rebuilds the B-tree indexes
+func (s *Store[T]) populateBTreeIndexes() error {
+	return s.database.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(s.bucket)
+		if b == nil {
+			return nil // no data yet
+		}
+		// Try to load persisted B-trees first
+		for fieldName := range s.indexFields {
+			data := b.Get([]byte("_btree_" + fieldName))
+			if data != nil {
+				bt, err := deserializeBTreeIndex(data)
+				if err == nil {
+					s.btreeIndexes[fieldName] = bt
+					continue
+				}
+				// If deserialize fails, rebuild
+			}
+			// Rebuild from data
+			s.btreeIndexes[fieldName] = NewBTreeIndex(32)
+		}
+		// Populate from data
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if bytes.HasPrefix(k, []byte("_btree_")) {
+				continue // skip persisted B-trees
+			}
+			var value T
+			err := msgpack.Unmarshal(v, &value)
+			if err != nil {
+				return err
+			}
+			indexValues := s.extractIndexValues(value)
+			key := string(k)
+			for fieldName, indexValue := range indexValues {
+				if indexValue != "" {
+					s.btreeIndexes[fieldName].Insert(indexValue, key)
+				}
+			}
+		}
+		return nil
+	})
+}
+
 // Checks if a key is valid
 func validateKey(key string) error {
 	if key == "" {
@@ -102,11 +164,6 @@ func validateKey(key string) error {
 	}
 	if len(key) > MaxKeyLength {
 		return InvalidKeyError{Key: key}
-	}
-	for _, r := range key {
-		if r == '\x00' {
-			return InvalidKeyError{Key: key}
-		}
 	}
 	return nil
 }

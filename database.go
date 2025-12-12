@@ -61,19 +61,12 @@ type DB struct {
 	closeWaitGroup sync.WaitGroup
 }
 
-type indexOperation struct {
-	IndexName string
-	OldValue  string
-	NewValue  string
-}
-
 type operation struct {
-	Bucket          []byte
-	Key             string
-	Value           []byte
-	IsPut           bool
-	IndexOperations []indexOperation
-	Epoch           uint64
+	Bucket []byte
+	Key    string
+	Value  []byte
+	IsPut  bool
+	Epoch  uint64
 }
 
 type walEntry struct {
@@ -288,30 +281,6 @@ func (db *DB) replayWAL() error {
 				}
 			}
 
-			// Maintain index consistency during replay.
-			// Since indexes are derived from data, we must update them as we replay operations
-			// to ensure the database state matches what it would have been without the crash.
-			for _, idxOp := range operation.IndexOperations {
-				idxBucketName := string(operation.Bucket) + "_index_" + idxOp.IndexName
-				idxB, err := tx.CreateBucketIfNotExists([]byte(idxBucketName))
-				if err != nil {
-					return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: IndexError{IndexName: idxOp.IndexName, Operation: "create_bucket", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}}
-				}
-				if idxOp.OldValue != "" {
-					oldKey := idxOp.OldValue + "\x00" + operation.Key
-					err = idxB.Delete([]byte(oldKey))
-					if err != nil {
-						return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: IndexError{IndexName: idxOp.IndexName, Operation: "delete", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}}
-					}
-				}
-				if idxOp.NewValue != "" {
-					newKey := idxOp.NewValue + "\x00" + operation.Key
-					err = idxB.Put([]byte(newKey), []byte{})
-					if err != nil {
-						return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: IndexError{IndexName: idxOp.IndexName, Operation: "put", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}}
-					}
-				}
-			}
 			return nil
 		})
 		if err != nil {
@@ -377,27 +346,6 @@ func (db *DB) Flush() {
 				err = b.Delete([]byte(operation.Key))
 				if err != nil {
 					return err
-				}
-			}
-			for _, idxOp := range operation.IndexOperations {
-				idxBucketName := string(operation.Bucket) + "_index_" + idxOp.IndexName
-				idxB, err := tx.CreateBucketIfNotExists([]byte(idxBucketName))
-				if err != nil {
-					return IndexError{IndexName: idxOp.IndexName, Operation: "create_bucket", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}
-				}
-				if idxOp.OldValue != "" {
-					oldKey := idxOp.OldValue + "\x00" + operation.Key
-					err = idxB.Delete([]byte(oldKey))
-					if err != nil {
-						return IndexError{IndexName: idxOp.IndexName, Operation: "delete", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}
-					}
-				}
-				if idxOp.NewValue != "" {
-					newKey := idxOp.NewValue + "\x00" + operation.Key
-					err = idxB.Put([]byte(newKey), []byte{})
-					if err != nil {
-						return IndexError{IndexName: idxOp.IndexName, Operation: "put", Bucket: string(operation.Bucket), Key: operation.Key, Err: err}
-					}
 				}
 			}
 		}

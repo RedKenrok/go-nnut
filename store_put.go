@@ -32,17 +32,17 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 
 	newIndexValues := s.extractIndexValues(value)
 
-	// Prepare index maintenance operations
-	var indexOperations []indexOperation
+	// Update B-tree indexes
 	for name := range s.indexFields {
 		oldValue := oldIndexValues[name]
 		newValue := newIndexValues[name]
 		if oldValue != newValue {
-			indexOperations = append(indexOperations, indexOperation{
-				IndexName: name,
-				OldValue:  oldValue,
-				NewValue:  newValue,
-			})
+			if oldValue != "" {
+				s.btreeIndexes[name].Delete(oldValue, key)
+			}
+			if newValue != "" {
+				s.btreeIndexes[name].Insert(newValue, key)
+			}
 		}
 	}
 
@@ -53,11 +53,10 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 	}
 
 	operation := operation{
-		Bucket:          s.bucket,
-		Key:             key,
-		Value:           data,
-		IsPut:           true,
-		IndexOperations: indexOperations,
+		Bucket: s.bucket,
+		Key:    key,
+		Value:  data,
+		IsPut:  true,
 	}
 
 	return s.database.writeOperation(ctx, operation)
@@ -101,17 +100,17 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 
 		newIndexValues := s.extractIndexValues(value)
 
-		// Set up index modifications
-		var indexOperations []indexOperation
+		// Update B-tree indexes
 		for name := range s.indexFields {
 			oldValue := oldIndexValues[name]
 			newValue := newIndexValues[name]
 			if oldValue != newValue {
-				indexOperations = append(indexOperations, indexOperation{
-					IndexName: name,
-					OldValue:  oldValue,
-					NewValue:  newValue,
-				})
+				if oldValue != "" {
+					s.btreeIndexes[name].Delete(oldValue, key)
+				}
+				if newValue != "" {
+					s.btreeIndexes[name].Insert(newValue, key)
+				}
 			}
 		}
 
@@ -127,13 +126,27 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 		data := buf.Bytes()
 
 		operation := operation{
-			Bucket:          s.bucket,
-			Key:             key,
-			Value:           data,
-			IsPut:           true,
-			IndexOperations: indexOperations,
+			Bucket: s.bucket,
+			Key:    key,
+			Value:  data,
+			IsPut:  true,
 		}
 		operations = append(operations, operation)
+	}
+
+	// Add B-tree persistence operations to the batch
+	for fieldName, bt := range s.btreeIndexes {
+		data, err := bt.Serialize()
+		if err != nil {
+			return err
+		}
+		btreeOp := operation{
+			Bucket: s.bucket,
+			Key:    "_btree_" + fieldName,
+			Value:  data,
+			IsPut:  true,
+		}
+		operations = append(operations, btreeOp)
 	}
 
 	return s.database.writeOperations(ctx, operations)
