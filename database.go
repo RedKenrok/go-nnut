@@ -460,6 +460,23 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 	}
 }
 
+// Close flushes any data from the WAL to the database and closes the database
+func (db *DB) Close() error {
+	db.Flush()
+
+	// Close channels to stop background goroutines (only if not already closed)
+	select {
+	case <-db.closeChannel:
+		// Already closed
+	default:
+		close(db.closeChannel)
+	}
+	db.closeWaitGroup.Wait()
+
+	// Close the underlying bolt database
+	return db.DB.Close()
+}
+
 // bufferKey generates a unique key for the operations buffer
 func bufferKey(bucket []byte, key string) string {
 	return string(bucket) + "\x00" + key

@@ -86,6 +86,10 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 		return WrappedError{Operation: "get_batch", Bucket: string(s.bucket), Err: err}
 	}
 
+	// Collect all index operations for batching
+	indexInserts := make(map[string][]BTreeItem)
+	indexDeletes := make(map[string][]BTreeItem)
+
 	// Build operations for each record
 	var operations []operation
 	for _, key := range keys {
@@ -100,30 +104,31 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 
 		newIndexValues := s.extractIndexValues(value)
 
-		// Update B-tree indexes
+		// Collect B-tree index operations for batching
 		for name := range s.indexFields {
-			oldValue := oldIndexValues[name]
-			newValue := newIndexValues[name]
-			if oldValue != newValue {
-				if oldValue != "" {
-					s.btreeIndexes[name].Delete(oldValue, key)
+			oldVal := oldIndexValues[name]
+			newVal := newIndexValues[name]
+			if oldVal != newVal {
+				if oldVal != "" {
+					indexDeletes[name] = append(indexDeletes[name], BTreeItem{Key: oldVal, Value: key})
 				}
-				if newValue != "" {
-					s.btreeIndexes[name].Insert(newValue, key)
+				if newVal != "" {
+					indexInserts[name] = append(indexInserts[name], BTreeItem{Key: newVal, Value: key})
 				}
 			}
 		}
 
 		buf := bufferPool.Get().(*bytes.Buffer)
-		defer bufferPool.Put(buf)
 		buf.Reset()
 		encoder := msgpack.NewEncoder(buf)
 		err = encoder.Encode(value)
 		if err != nil {
+			bufferPool.Put(buf)
 			s.database.Logger().Errorf("Failed to encode value for key %s in bucket %s: %v", key, s.bucket, err)
 			return WrappedError{Operation: "encode", Bucket: string(s.bucket), Key: key, Err: err}
 		}
-		data := buf.Bytes()
+		data := make([]byte, buf.Len())
+		copy(data, buf.Bytes())
 
 		operation := operation{
 			Bucket: s.bucket,
@@ -132,33 +137,15 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 			IsPut:  true,
 		}
 		operations = append(operations, operation)
+		bufferPool.Put(buf)
 	}
 
-	// Add B-tree persistence operations to the batch for dirty indexes
-	for fieldName, bt := range s.btreeIndexes {
-		bt.mu.RLock()
-		if !bt.dirty {
-			bt.mu.RUnlock()
-			continue
-		}
-		bt.mu.RUnlock()
-
-		data, err := bt.Serialize()
-		if err != nil {
-			return err
-		}
-		btreeOp := operation{
-			Bucket: s.bucket,
-			Key:    "_btree_" + fieldName,
-			Value:  data,
-			IsPut:  true,
-		}
-		operations = append(operations, btreeOp)
-
-		// Mark as clean
-		bt.mu.Lock()
-		bt.dirty = false
-		bt.mu.Unlock()
+	// Apply batched index operations
+	for name, items := range indexDeletes {
+		s.btreeIndexes[name].BulkDelete(items)
+	}
+	for name, items := range indexInserts {
+		s.btreeIndexes[name].BulkInsert(items)
 	}
 
 	return s.database.writeOperations(ctx, operations)

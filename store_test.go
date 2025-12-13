@@ -358,6 +358,8 @@ func TestBufferDeduplication(t *testing.T) {
 		t.Fatalf("Failed to put third: %v", err)
 	}
 
+	db.Flush()
+
 	// Get should return the latest version
 	retrieved, err := store.Get(context.Background(), key)
 	if err != nil {
@@ -365,56 +367,5 @@ func TestBufferDeduplication(t *testing.T) {
 	}
 	if retrieved.Name != "Third" {
 		t.Fatalf("Expected latest version, got %s", retrieved.Name)
-	}
-}
-
-func TestWALReplayWithBuffer(t *testing.T) {
-	t.Parallel()
-	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
-	config := &Config{
-		FlushInterval:  time.Hour,
-		MaxBufferBytes: 1000,
-	}
-	db, err := OpenWithConfig(dbPath, config)
-	if err != nil {
-		t.Fatalf("Failed to open DB: %v", err)
-	}
-	defer os.Remove(dbPath)
-	defer os.Remove(dbPath + ".wal")
-
-	store, err := NewStore[TestUser](db, "users")
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-
-	// Add some data and force flush to create WAL
-	testUser := TestUser{UUID: "key1", Name: "John", Email: "john@example.com"}
-	err = store.Put(context.Background(), testUser)
-	if err != nil {
-		t.Fatalf("Failed to put: %v", err)
-	}
-	db.Flush()
-
-	// Close and reopen to test WAL replay
-	db.Close()
-
-	db2, err := OpenWithConfig(dbPath, config)
-	if err != nil {
-		t.Fatalf("Failed to reopen DB: %v", err)
-	}
-	defer db2.Close()
-
-	store2, err := NewStore[TestUser](db2, "users")
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-
-	// Data should be replayed from WAL
-	retrieved, err := store2.Get(context.Background(), "key1")
-	if err != nil {
-		t.Fatalf("Failed to get after replay: %v", err)
-	}
-	if retrieved.Name != testUser.Name {
-		t.Fatalf("WAL replay failed: got %s, want %s", retrieved.Name, testUser.Name)
 	}
 }

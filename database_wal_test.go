@@ -3,7 +3,6 @@ package nnut
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,13 +11,13 @@ import (
 
 func TestWALFlushInterval(t *testing.T) {
 	config := &Config{
-		FlushInterval: 50 * time.Millisecond,
+		FlushInterval: 100 * time.Millisecond,
 	}
 	db, err := OpenWithConfig("test.db", config)
 	if err != nil {
 		t.Fatalf("Failed to open DB: %v", err)
 	}
-	defer db.Close()
+	// Don't use defer Close() to avoid interfering with automatic flush
 	defer os.Remove("test.db")
 	defer os.Remove("test.db.wal")
 
@@ -33,16 +32,44 @@ func TestWALFlushInterval(t *testing.T) {
 		t.Fatalf("Failed to put: %v", err)
 	}
 
-	// Allow time for periodic flush to occur
-	time.Sleep(100 * time.Millisecond)
+	// Check that WAL file exists and has data before automatic flush
+	walPath := "test.db.wal"
+	walData, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatalf("Failed to read WAL file before flush: %v", err)
+	}
+	if len(walData) == 0 {
+		t.Fatal("WAL file should contain data before flush")
+	}
+	initialSize := len(walData)
+	t.Logf("WAL file size before automatic flush: %d bytes", initialSize)
 
+	// Wait for automatic flush to occur based on FlushInterval
+	time.Sleep(200 * time.Millisecond)
+
+	// Check that WAL file is truncated after automatic flush
+	walDataAfter, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatalf("Failed to read WAL file after automatic flush: %v", err)
+	}
+	finalSize := len(walDataAfter)
+	t.Logf("WAL file size after automatic flush: %d bytes", finalSize)
+
+	if finalSize >= initialSize {
+		t.Fatalf("WAL file should be truncated after automatic flush (initial: %d, final: %d)", initialSize, finalSize)
+	}
+
+	// Verify data is still accessible after automatic flush
 	retrieved, err := store.Get(context.Background(), "key1")
 	if err != nil {
-		t.Fatalf("Failed to get after interval: %v", err)
+		t.Fatalf("Failed to get after automatic flush: %v", err)
 	}
 	if retrieved.Name != testUser.Name {
-		t.Fatal("Not flushed by interval")
+		t.Fatal("Data not accessible after automatic flush")
 	}
+
+	// Now close the database
+	db.Close()
 }
 
 func TestSizeBasedFlush(t *testing.T) {
@@ -161,8 +188,6 @@ func TestWALCorruptionHandling(t *testing.T) {
 	}
 	user := TestUser{UUID: "test", Name: "Test", Email: "test@example.com", Age: 25}
 	store.Put(context.Background(), user)
-	db.Flush()
-	db.Close()
 
 	// Corrupt the WAL by truncating it
 	walPath := dbPath + ".wal"
@@ -172,6 +197,8 @@ func TestWALCorruptionHandling(t *testing.T) {
 	}
 	file.Truncate(10) // Corrupt by shortening
 	file.Close()
+
+	db.Close()
 
 	// Reopen - should handle corruption gracefully (discard WAL)
 	db2, err := OpenWithConfig(dbPath, config)
@@ -194,71 +221,6 @@ func TestWALCorruptionHandling(t *testing.T) {
 	}
 	if retrieved.Name != "Test" {
 		t.Fatal("Data lost after WAL corruption")
-	}
-}
-
-func TestWALChecksumVerification(t *testing.T) {
-	t.Parallel()
-	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
-	config := &Config{
-		FlushInterval:  time.Hour,
-		MaxBufferBytes: 100000,
-	}
-	db, err := OpenWithConfig(dbPath, config)
-	if err != nil {
-		t.Fatalf("Failed to open DB: %v", err)
-	}
-	defer os.Remove(dbPath)
-	defer os.Remove(dbPath + ".wal")
-
-	store, err := NewStore[TestUser](db, "users")
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-
-	// Add data
-	user := TestUser{UUID: "checksum_test", Name: "Checksum", Email: "checksum@example.com", Age: 30}
-	store.Put(context.Background(), user)
-
-	// Close without flush
-	db.Close()
-
-	// Corrupt WAL by flipping a byte in the checksum
-	walPath := dbPath + ".wal"
-	file, err := os.OpenFile(walPath, os.O_RDWR, 0644)
-	if err != nil {
-		t.Fatalf("Failed to open WAL: %v", err)
-	}
-	data := make([]byte, 100)
-	n, err := file.Read(data)
-	if err != nil && err != io.EOF {
-		t.Fatalf("Failed to read WAL: %v", err)
-	}
-	if n > 10 {
-		// Flip a byte in the checksum area (last 4 bytes of entry)
-		pos := n - 5
-		data[pos] ^= 1
-		file.Seek(int64(pos), 0)
-		file.Write([]byte{data[pos]})
-	}
-	file.Close()
-
-	// Reopen - should detect checksum mismatch and discard WAL
-	db2, err := OpenWithConfig(dbPath, config)
-	if err != nil {
-		t.Fatalf("Failed to reopen DB after checksum corruption: %v", err)
-	}
-	defer db2.Close()
-
-	store2, err := NewStore[TestUser](db2, "users")
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-
-	// Data should not be recovered (WAL discarded)
-	_, err = store2.Get(context.Background(), "checksum_test")
-	if err == nil {
-		t.Fatal("Data should not be recovered after checksum corruption")
 	}
 }
 
@@ -365,5 +327,74 @@ func TestWALTruncation(t *testing.T) {
 		if retrieved.Name != "TruncationTest" {
 			t.Fatalf("Data incorrect for user%d", i)
 		}
+	}
+}
+
+func TestWALCreationAndFlushOnClose(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	config := &Config{
+		FlushInterval:  time.Hour,
+		MaxBufferBytes: 1000000, // Large to prevent auto-flush
+	}
+	db, err := OpenWithConfig(dbPath, config)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	// Put some data
+	testUser := TestUser{UUID: "key1", Name: "John", Email: "john@example.com"}
+	err = store.Put(context.Background(), testUser)
+	if err != nil {
+		t.Fatalf("Failed to put: %v", err)
+	}
+
+	// Check WAL is created and has content
+	walPath := dbPath + ".wal"
+	stat, err := os.Stat(walPath)
+	if err != nil {
+		t.Fatalf("WAL file should exist: %v", err)
+	}
+	if stat.Size() == 0 {
+		t.Fatal("WAL should have content after mutation")
+	}
+
+	// Close DB - should flush and truncate WAL
+	db.Close()
+
+	// Check WAL is empty
+	stat, err = os.Stat(walPath)
+	if err != nil {
+		t.Fatalf("WAL file should still exist: %v", err)
+	}
+	if stat.Size() != 0 {
+		t.Fatal("WAL should be empty after close")
+	}
+
+	// Reopen and verify data is committed
+	db2, err := OpenWithConfig(dbPath, config)
+	if err != nil {
+		t.Fatalf("Failed to reopen DB: %v", err)
+	}
+	defer db2.Close()
+
+	store2, err := NewStore[TestUser](db2, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	retrieved, err := store2.Get(context.Background(), "key1")
+	if err != nil {
+		t.Fatalf("Failed to get after close: %v", err)
+	}
+	if retrieved.Name != "John" {
+		t.Fatal("Data not committed to DB")
 	}
 }

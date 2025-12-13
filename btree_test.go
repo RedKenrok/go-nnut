@@ -87,7 +87,7 @@ func TestBTreeIndex_Serialization(t *testing.T) {
 		t.Fatalf("Serialize failed: %v", err)
 	}
 
-	bt2, err := deserializeBTreeIndex(data)
+	bt2, err := deserializeBTree(data)
 	if err != nil {
 		t.Fatalf("Deserialize failed: %v", err)
 	}
@@ -280,6 +280,7 @@ func TestBTreeIndex_Persistence(t *testing.T) {
 	}
 
 	// Close and reopen database
+	store.Flush()
 	db.Close()
 	db, err = Open(dbPath)
 	if err != nil {
@@ -569,7 +570,7 @@ func FuzzBTreeSerialization(f *testing.F) {
 			t.Errorf("Serialization failed: %v", err)
 		}
 
-		bt2, err := deserializeBTreeIndex(data)
+		bt2, err := deserializeBTree(data)
 		if err != nil {
 			t.Errorf("Deserialization failed: %v", err)
 		}

@@ -116,7 +116,7 @@ func BenchmarkCountQueryNoConditions(b *testing.B) {
 	}
 }
 
-func BenchmarkCountQueryNonIndexed(b *testing.B) {
+func BenchmarkCountQueryGreaterThan(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")

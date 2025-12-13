@@ -122,13 +122,13 @@ func TestRaceConditionsFlush(t *testing.T) {
 			defer wg.Done()
 			for k := 0; k < 10; k++ {
 				db.Flush()
-				time.Sleep(1 * time.Millisecond) // Small delay to interleave
+				time.Sleep(time.Millisecond) // Small delay to interleave
 			}
 		}()
 	}
 
 	wg.Wait()
-	db.Flush() // Final flush
+	db.Flush()
 
 	// Verify data
 	for i := 0; i < numGoroutines; i++ {

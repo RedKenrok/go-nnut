@@ -668,35 +668,6 @@ func (t *BTree) RangeSearch(min string, max string, includeMin bool, includeMax 
 	return result
 }
 
-// rangeSearch traverses the tree to find all keys in range (legacy implementation)
-func (t *BTree) rangeSearch(node *BTreeNode, min string, max string, includeMin bool, includeMax bool, result *[]string) {
-	if node == nil {
-		return
-	}
-
-	for i, key := range node.Keys {
-		if (min == "" || (includeMin && key >= min) || (!includeMin && key > min)) &&
-			(max == "" || (includeMax && key <= max) || (!includeMax && key < max)) {
-			*result = append(*result, node.Values[i]...)
-		}
-		if !node.IsLeaf {
-			t.rangeSearch(node.Children[i], min, max, includeMin, includeMax, result)
-		}
-	}
-	if !node.IsLeaf {
-		t.rangeSearch(node.Children[len(node.Children)-1], min, max, includeMin, includeMax, result)
-	}
-}
-
-// RangeCount returns the number of record keys in the given range
-func (t *BTree) RangeCount(min string, max string, includeMin bool, includeMax bool) int {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	var result []string
-	t.rangeSearch(t.Root, min, max, includeMin, includeMax, &result)
-	return len(result)
-}
-
 // BulkInsert inserts multiple key-value pairs efficiently
 func (t *BTree) BulkInsert(items []BTreeItem) {
 	t.mu.Lock()
@@ -722,6 +693,8 @@ func (t *BTree) BulkInsert(items []BTreeItem) {
 		}
 		t.Root.insertNonFull(t.BranchingFactor, item.Key, item.Value)
 	}
+	t.dirty = true
+	t.version++
 }
 
 // BulkDelete deletes multiple key-value pairs efficiently
@@ -741,6 +714,8 @@ func (t *BTree) BulkDelete(items []BTreeItem) {
 			t.Root = t.Root.Children[0]
 		}
 	}
+	t.dirty = true
+	t.version++
 }
 
 // BulkSearch performs multiple equality searches efficiently
@@ -782,7 +757,7 @@ func (t *BTree) Serialize() ([]byte, error) {
 }
 
 // Deserialize decodes the B-tree from msgpack bytes
-func deserializeBTreeIndex(data []byte) (*BTree, error) {
+func deserializeBTree(data []byte) (*BTree, error) {
 	var pb persistedBTree
 	err := msgpack.Unmarshal(data, &pb)
 	if err != nil {

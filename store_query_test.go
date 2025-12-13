@@ -693,7 +693,7 @@ func TestCount(t *testing.T) {
 	}
 }
 
-func TestCountEmptyIndex(t *testing.T) {
+func TestCountEmpty(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
 	db, err := Open(dbPath)
@@ -1228,4 +1228,166 @@ func FuzzQueryConditions(f *testing.F) {
 		_, _ = store.Count(context.Background())                                                             // Test Count method
 		_, _ = store.DeleteQuery(context.Background(), &Query{Conditions: []Condition{condition}, Limit: 1}) // Test DeleteQuery with limit to avoid deleting everything
 	})
+}
+
+func TestCountQueryWithBufferedOperations(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	// Put initial data and flush
+	users := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Bob", Email: "bob@example.com", Age: 25},
+		{UUID: "3", Name: "Charlie", Email: "charlie@example.com", Age: 35},
+	}
+	for _, u := range users {
+		err = store.Put(context.Background(), u)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Test CountQuery with conditions and buffered operations
+	// Count Alice users (should be 1)
+	count, err := store.CountQuery(context.Background(), &Query{
+		Conditions: []Condition{
+			{Field: "Name", Value: "Alice"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to count query: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Expected count 1 for Alice, got %d", count)
+	}
+
+	// Add a new Alice user (buffered operation)
+	newAlice := TestUser{UUID: "4", Name: "Alice", Email: "alice2@example.com", Age: 40}
+	err = store.Put(context.Background(), newAlice)
+	if err != nil {
+		t.Fatalf("Failed to put new Alice: %v", err)
+	}
+
+	// Count should now include the buffered operation
+	count, err = store.CountQuery(context.Background(), &Query{
+		Conditions: []Condition{
+			{Field: "Name", Value: "Alice"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to count query with buffered op: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("Expected count 2 for Alice (including buffered), got %d", count)
+	}
+
+	// Delete an existing Alice (buffered operation)
+	err = store.Delete(context.Background(), "1") // Delete the original Alice
+	if err != nil {
+		t.Fatalf("Failed to delete Alice: %v", err)
+	}
+
+	// Count should reflect the deletion
+	count, err = store.CountQuery(context.Background(), &Query{
+		Conditions: []Condition{
+			{Field: "Name", Value: "Alice"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to count query after delete: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Expected count 1 for Alice (after delete), got %d", count)
+	}
+}
+
+func TestCountQueryIndexWithBufferedOperations(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	// Put initial data and flush
+	users := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com", Age: 30},
+		{UUID: "2", Name: "Bob", Email: "bob@example.com", Age: 25},
+		{UUID: "3", Name: "Charlie", Email: "charlie@example.com", Age: 35},
+	}
+	for _, u := range users {
+		err = store.Put(context.Background(), u)
+		if err != nil {
+			t.Fatalf("Failed to put: %v", err)
+		}
+	}
+	db.Flush()
+
+	// Test CountQuery with index and buffered operations
+	// Count all users by Name index
+	count, err := store.CountQuery(context.Background(), &Query{
+		Index: "Name",
+	})
+	if err != nil {
+		t.Fatalf("Failed to count query by index: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("Expected count 3 by Name index, got %d", count)
+	}
+
+	// Add a new user (buffered operation)
+	newUser := TestUser{UUID: "4", Name: "David", Email: "david@example.com", Age: 28}
+	err = store.Put(context.Background(), newUser)
+	if err != nil {
+		t.Fatalf("Failed to put new user: %v", err)
+	}
+
+	// Count should include the buffered operation
+	count, err = store.CountQuery(context.Background(), &Query{
+		Index: "Name",
+	})
+	if err != nil {
+		t.Fatalf("Failed to count query by index with buffered op: %v", err)
+	}
+	if count != 4 {
+		t.Fatalf("Expected count 4 by Name index (including buffered), got %d", count)
+	}
+
+	// Delete an existing user (buffered operation)
+	err = store.Delete(context.Background(), "2") // Delete Bob
+	if err != nil {
+		t.Fatalf("Failed to delete user: %v", err)
+	}
+
+	// Count should reflect the deletion
+	count, err = store.CountQuery(context.Background(), &Query{
+		Index: "Name",
+	})
+	if err != nil {
+		t.Fatalf("Failed to count query by index after delete: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("Expected count 3 by Name index (after delete), got %d", count)
+	}
 }

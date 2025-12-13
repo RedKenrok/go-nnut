@@ -2,7 +2,6 @@ package nnut
 
 import (
 	"context"
-	"strings"
 
 	"go.etcd.io/bbolt"
 )
@@ -22,23 +21,11 @@ func (s *Store[T]) Count(ctx context.Context) (int, error) {
 			count = 0
 			return nil
 		}
-
-		// Count only record keys, skip _btree_ metadata
-		cursor := bucket.Cursor()
-		for keyBytes, _ := cursor.First(); keyBytes != nil; keyBytes, _ = cursor.Next() {
-			key := string(keyBytes)
-			if !strings.HasPrefix(key, "_btree_") {
-				count++
-			}
-		}
+		count = bucket.Stats().KeyN
 
 		// Adjust for buffered operations
 		bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
 		for _, operation := range bufferedOperations {
-			// Skip B-tree operations
-			if strings.HasPrefix(operation.Key, "_btree_") {
-				continue
-			}
 			exists := bucket.Get([]byte(operation.Key)) != nil
 			if operation.IsPut && !exists {
 				count++ // New key being added
@@ -67,20 +54,65 @@ func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 	default:
 	}
 	err := s.database.View(func(tx *bbolt.Tx) error {
-		// Collect candidate keys from conditions
-		var candidateKeys []string
-		if len(query.Conditions) > 0 {
-			candidateKeys = s.getCandidateKeysTx(tx, query.Conditions, 0)
-		} else if query.Index != "" {
-			// No conditions, but index, count from index
-			count = s.countKeysFromIndexTx(tx, query.Index)
-			return nil
-		} else {
-			// No conditions, no index, count all keys
-			count = s.countAllKeysTx(tx)
+		bucket := tx.Bucket(s.bucket)
+		if bucket == nil {
+			count = 0
 			return nil
 		}
-		count = len(candidateKeys)
+
+		// Collect candidate keys from conditions
+		if len(query.Conditions) > 0 {
+			candidateKeys := s.getCandidateKeysTx(tx, query.Conditions, 0)
+			count = len(candidateKeys)
+
+			// Apply buffered operations to get accurate count
+			// Note: Put operations are already reflected in candidateKeys via index updates
+			// We only need to handle Delete operations that remove keys from results
+			bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
+			for _, operation := range bufferedOperations {
+				if !operation.IsPut {
+					// For Delete operations, check if the key was in our candidates
+					for _, candidateKey := range candidateKeys {
+						if operation.Key == candidateKey {
+							count-- // Existing key being deleted that matched conditions
+							break
+						}
+					}
+				}
+			}
+			return nil
+		} else if query.Index != "" {
+			// No conditions, but index, count from index
+			// Note: B-tree indexes are updated immediately for buffered operations,
+			// so CountKeys() already reflects buffered Puts
+			count = s.btreeIndexes[query.Index].CountKeys()
+
+			// Apply buffered operations to get accurate count
+			// We only need to handle Delete operations that remove keys from the index
+			bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
+			for _, operation := range bufferedOperations {
+				if !operation.IsPut {
+					// For Delete operations, check if the key exists in the index
+					if s.btreeIndexes[query.Index].Search(operation.Key) != nil {
+						count-- // Existing key being deleted from index
+					}
+				}
+			}
+			return nil
+		}
+
+		// No conditions, no index, count all keys
+		count = bucket.Stats().KeyN
+
+		bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
+		for _, operation := range bufferedOperations {
+			exists := bucket.Get([]byte(operation.Key)) != nil
+			if operation.IsPut && !exists {
+				count++ // New key being added
+			} else if !operation.IsPut && exists {
+				count-- // Existing key being deleted
+			}
+		}
 		return nil
 	})
 	return count, err

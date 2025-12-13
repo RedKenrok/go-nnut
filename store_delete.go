@@ -54,6 +54,9 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 		return WrappedError{Operation: "get_batch", Bucket: string(s.bucket), Err: err}
 	}
 
+	// Collect all index operations for batching
+	indexDeletes := make(map[string][]BTreeItem)
+
 	// Build operations for each key to be deleted
 	var operations []operation
 	for _, key := range keys {
@@ -65,11 +68,11 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 			oldIndexValues = make(map[string]string)
 		}
 
-		// Update B-tree indexes
+		// Collect B-tree index operations for batching
 		for name := range s.indexFields {
-			oldValue := oldIndexValues[name]
-			if oldValue != "" {
-				s.btreeIndexes[name].Delete(oldValue, key)
+			oldVal := oldIndexValues[name]
+			if oldVal != "" {
+				indexDeletes[name] = append(indexDeletes[name], BTreeItem{Key: oldVal, Value: key})
 			}
 		}
 
@@ -82,31 +85,9 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 		operations = append(operations, operation)
 	}
 
-	// Add B-tree persistence operations to the batch for dirty indexes
-	for fieldName, bt := range s.btreeIndexes {
-		bt.mu.RLock()
-		if !bt.dirty {
-			bt.mu.RUnlock()
-			continue
-		}
-		bt.mu.RUnlock()
-
-		data, err := bt.Serialize()
-		if err != nil {
-			return err
-		}
-		btreeOp := operation{
-			Bucket: s.bucket,
-			Key:    "_btree_" + fieldName,
-			Value:  data,
-			IsPut:  true,
-		}
-		operations = append(operations, btreeOp)
-
-		// Mark as clean
-		bt.mu.Lock()
-		bt.dirty = false
-		bt.mu.Unlock()
+	// Apply batched index operations
+	for name, items := range indexDeletes {
+		s.btreeIndexes[name].BulkDelete(items)
 	}
 
 	return s.database.writeOperations(ctx, operations)
@@ -158,6 +139,9 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 			return BucketNotFoundError{Bucket: string(s.bucket)}
 		}
 
+		// Collect index operations for batching
+		indexDeletes := make(map[string][]BTreeItem)
+
 		for _, key := range keysToDelete {
 			data := bucket.Get([]byte(key))
 			if data == nil {
@@ -167,9 +151,9 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 			// Decode the record to update B-trees
 			var item T
 			decoder := msgpack.GetDecoder()
-			defer msgpack.PutDecoder(decoder)
 			decoder.Reset(bytes.NewReader(data))
 			err := decoder.Decode(&item)
+			msgpack.PutDecoder(decoder)
 			if err != nil {
 				s.database.Logger().Errorf("Failed to decode value for key %s in bucket %s during delete query: %v", key, s.bucket, err)
 				continue
@@ -180,26 +164,19 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 				continue
 			}
 
-			// Update B-trees by removing old index entries
+			// Collect B-tree index operations for batching
 			oldIndexValues := s.extractIndexValues(item)
 			for indexName, value := range oldIndexValues {
 				if value != "" {
-					s.btreeIndexes[indexName].Delete(value, key)
+					indexDeletes[indexName] = append(indexDeletes[indexName], BTreeItem{Key: value, Value: key})
 				}
 			}
 			deletedCount++
 		}
 
-		// Persist B-trees within the same transaction
-		for fieldName, bt := range s.btreeIndexes {
-			data, err := bt.Serialize()
-			if err != nil {
-				return err
-			}
-			err = bucket.Put([]byte("_btree_"+fieldName), data)
-			if err != nil {
-				return err
-			}
+		// Apply batched index operations
+		for indexName, items := range indexDeletes {
+			s.btreeIndexes[indexName].BulkDelete(items)
 		}
 
 		return nil

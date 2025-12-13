@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"reflect"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/vmihailenco/msgpack/v5"
@@ -420,10 +419,6 @@ func (s *Store[T]) getAllKeysTx(tx *bbolt.Tx, maxKeys int) []string {
 			break
 		}
 		key := string(keyBytes)
-		// Skip B-tree metadata keys
-		if strings.HasPrefix(key, "_btree_") {
-			continue
-		}
 		keys = append(keys, key)
 	}
 	return keys
@@ -437,11 +432,8 @@ func (s *Store[T]) countAllKeysTx(tx *bbolt.Tx) int {
 		// Bucket not found, return 0
 		return count
 	}
-	cursor := bucket.Cursor()
-	for keyBytes, _ := cursor.First(); keyBytes != nil; keyBytes, _ = cursor.Next() {
-		count++
-	}
-	return count
+	// TODO: This does not keep the WAL / Operations buffer into account.
+	return bucket.Stats().KeyN
 }
 
 // getKeysFromIndexTx returns all keys sorted by the index
@@ -457,16 +449,6 @@ func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sortin
 		keys = keys[:maxKeys]
 	}
 	return keys
-}
-
-// countKeysFromIndexTx returns the count of keys in the index
-func (s *Store[T]) countKeysFromIndexTx(tx *bbolt.Tx, index string) int {
-	return s.btreeIndexes[index].CountKeys()
-}
-
-// countUniqueValuesFromIndexTx returns the count of unique values in the index
-func (s *Store[T]) countUniqueValuesFromIndexTx(tx *bbolt.Tx, index string) int {
-	return s.btreeIndexes[index].CountUniqueValues()
 }
 
 // scanForConditionsTx scans records and returns keys matching all conditions

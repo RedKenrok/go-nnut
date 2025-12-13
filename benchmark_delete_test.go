@@ -37,7 +37,6 @@ func BenchmarkDelete(b *testing.B) {
 			b.Fatalf("Failed to delete: %v", err)
 		}
 	}
-	db.Flush()
 }
 
 func BenchmarkDeleteBatch(b *testing.B) {
@@ -75,5 +74,4 @@ func BenchmarkDeleteBatch(b *testing.B) {
 			b.Fatalf("Failed to delete batch: %v", err)
 		}
 	}
-	db.Flush()
 }

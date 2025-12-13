@@ -32,7 +32,6 @@ func BenchmarkPut(b *testing.B) {
 			b.Fatalf("Failed to put: %v", err)
 		}
 	}
-	db.Flush()
 }
 
 func BenchmarkPutBatch(b *testing.B) {
@@ -66,5 +65,4 @@ func BenchmarkPutBatch(b *testing.B) {
 			b.Fatalf("Failed to put batch: %v", err)
 		}
 	}
-	db.Flush()
 }
