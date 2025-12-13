@@ -316,8 +316,11 @@ goos: darwin
 goarch: amd64
 pkg: github.com/redkenrok/go-nnut
 cpu: Intel(R) Core(TM) i5-1038NG7 CPU @ 2.00GHz
-BenchmarkCountQuery-8                   	 5687697	       952.5 ns/op	     552 B/op	      13 allocs/op
-BenchmarkCountQueryIndex-8              	12517838	       468.4 ns/op	     336 B/op	       5 allocs/op
+BenchmarkBTreeInsert-8                  	10858005	       602 ns/op	     162 B/op	       5 allocs/op
+BenchmarkBTreeSearch-8                  	28520066	       216 ns/op	      15 B/op	       1 allocs/op
+BenchmarkBTreeRange-8                   	  498735	     11838 ns/op	    4464 B/op	       8 allocs/op
+BenchmarkCountQuery-8                   	 5687697	       953 ns/op	     552 B/op	      13 allocs/op
+BenchmarkCountQueryIndex-8              	12517838	       468 ns/op	     336 B/op	       5 allocs/op
 BenchmarkCountQueryNoConditions-8       	   43652	    130991 ns/op	    4712 B/op	     524 allocs/op
 BenchmarkCountQueryNonIndexed-8         	     849	   6964034 ns/op	 2971026 B/op	   69283 allocs/op
 BenchmarkCount-8                        	   27404	    209838 ns/op	    4712 B/op	     524 allocs/op
@@ -326,21 +329,18 @@ BenchmarkDelete-8                       	  529224	     10865 ns/op	    1669 B/op
 BenchmarkDeleteBatch-8                  	 1123116	      4744 ns/op	    2190 B/op	      27 allocs/op
 BenchmarkGetQuery-8                     	 4755242	      1238 ns/op	     680 B/op	      19 allocs/op
 BenchmarkGetQueryMultipleConditions-8   	   61209	     96849 ns/op	   35642 B/op	     935 allocs/op
-BenchmarkGetQuerySorting-8              	 7475013	       768.0 ns/op	     464 B/op	      11 allocs/op
+BenchmarkGetQuerySorting-8              	 7475013	       768 ns/op	     464 B/op	      11 allocs/op
 BenchmarkGetQueryLimitOffset-8          	 4695606	      1243 ns/op	     680 B/op	      19 allocs/op
 BenchmarkGetQueryNoConditions-8         	   47558	    125074 ns/op	   59816 B/op	    1542 allocs/op
 BenchmarkGetQueryNonIndexedField-8      	   29383	    202972 ns/op	   85027 B/op	    2240 allocs/op
 BenchmarkGetQueryComplexOperators-8     	   16759	    357930 ns/op	  120571 B/op	    3293 allocs/op
 BenchmarkGetQueryLargeLimit-8           	 4790066	      1246 ns/op	     680 B/op	      19 allocs/op
 BenchmarkGetQueryOffsetOnly-8           	 4713601	      1265 ns/op	     680 B/op	      19 allocs/op
-BenchmarkGetQuerySortingAscending-8     	 6907369	       980.0 ns/op	     464 B/op	      11 allocs/op
+BenchmarkGetQuerySortingAscending-8     	 6907369	       980 ns/op	     464 B/op	      11 allocs/op
 BenchmarkGet-8                          	 2173563	      2582 ns/op	     940 B/op	      31 allocs/op
 BenchmarkGetBatch-8                     	 2979295	      1782 ns/op	     645 B/op	      17 allocs/op
 BenchmarkPut-8                          	  224310	     45720 ns/op	    5057 B/op	      75 allocs/op
 BenchmarkPutBatch-8                     	  194281	    152504 ns/op	  213105 B/op	      60 allocs/op
 BenchmarkHighLoadConcurrent-8           	 1359260	      4129 ns/op	    1671 B/op	      34 allocs/op
-BenchmarkWALTruncation-8                	78870758	        74.67 ns/op	      48 B/op	       1 allocs/op
-BenchmarkBTreeInsert-8                  	10858005	       602.4 ns/op	     162 B/op	       5 allocs/op
-BenchmarkBTreeSearch-8                  	28520066	       216.3 ns/op	      15 B/op	       1 allocs/op
-BenchmarkBTreeRange-8                   	  498735	     11838 ns/op	    4464 B/op	       8 allocs/op
+BenchmarkWALTruncation-8                	78870758	        75 ns/op	      48 B/op	       1 allocs/op
 ```
