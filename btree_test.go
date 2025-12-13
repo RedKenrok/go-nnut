@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -449,6 +450,71 @@ func TestBTreeIndex_IteratorEdgeCases(t *testing.T) {
 	it = NewBTreeIterator(bt, "a", "b", true, true)
 	if it.HasNext() {
 		t.Errorf("No match range should not have next")
+	}
+}
+
+func TestBTreeIndex_IteratorRangeQueries(t *testing.T) {
+	bt := NewBTreeIndex(4)
+
+	// Insert test data
+	keys := []string{"apple", "banana", "cherry", "date", "elderberry", "fig", "grape"}
+	for i, key := range keys {
+		bt.Insert(key, fmt.Sprintf("val%d", i))
+	}
+
+	// Test full range
+	it := NewBTreeIterator(bt, "", "", true, true)
+	var results []string
+	for it.HasNext() {
+		results = append(results, it.Next())
+	}
+	expected := []string{"val0", "val1", "val2", "val3", "val4", "val5", "val6"}
+	if !reflect.DeepEqual(results, expected) {
+		t.Errorf("Full range iterator returned %v, expected %v", results, expected)
+	}
+
+	// Test partial range
+	it = NewBTreeIterator(bt, "banana", "fig", true, true)
+	results = nil
+	for it.HasNext() {
+		results = append(results, it.Next())
+	}
+	expected = []string{"val1", "val2", "val3", "val4", "val5"}
+	if !reflect.DeepEqual(results, expected) {
+		t.Errorf("Partial range iterator returned %v, expected %v", results, expected)
+	}
+
+	// Test exclusive bounds
+	it = NewBTreeIterator(bt, "banana", "fig", false, false)
+	results = nil
+	for it.HasNext() {
+		results = append(results, it.Next())
+	}
+	expected = []string{"val2", "val3", "val4"}
+	if !reflect.DeepEqual(results, expected) {
+		t.Errorf("Exclusive range iterator returned %v, expected %v", results, expected)
+	}
+
+	// Test min only
+	it = NewBTreeIterator(bt, "cherry", "", true, true)
+	results = nil
+	for it.HasNext() {
+		results = append(results, it.Next())
+	}
+	expected = []string{"val2", "val3", "val4", "val5", "val6"}
+	if !reflect.DeepEqual(results, expected) {
+		t.Errorf("Min-only range iterator returned %v, expected %v", results, expected)
+	}
+
+	// Test max only
+	it = NewBTreeIterator(bt, "", "date", true, true)
+	results = nil
+	for it.HasNext() {
+		results = append(results, it.Next())
+	}
+	expected = []string{"val0", "val1", "val2", "val3"}
+	if !reflect.DeepEqual(results, expected) {
+		t.Errorf("Max-only range iterator returned %v, expected %v", results, expected)
 	}
 }
 

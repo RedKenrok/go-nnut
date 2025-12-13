@@ -19,7 +19,7 @@ func BenchmarkBTreeInsert(b *testing.B) {
 func BenchmarkBTreeSearch(b *testing.B) {
 	bt := NewBTreeIndex(32)
 	// Setup
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 100000; i++ {
 		bt.Insert(fmt.Sprintf("key%d", i), fmt.Sprintf("val%d", i))
 	}
 	b.ResetTimer()
@@ -31,8 +31,7 @@ func BenchmarkBTreeSearch(b *testing.B) {
 
 func BenchmarkBTreeRange(b *testing.B) {
 	bt := NewBTreeIndex(32)
-	// Setup with smaller dataset
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 100000; i++ {
 		bt.Insert(fmt.Sprintf("key%04d", i), fmt.Sprintf("val%d", i))
 	}
 	b.ResetTimer()

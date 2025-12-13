@@ -84,12 +84,12 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 
 	// Add B-tree persistence operations to the batch for dirty indexes
 	for fieldName, bt := range s.btreeIndexes {
-  	bt.mu.RLock()
-  	if !bt.dirty {
-  		bt.mu.RUnlock()
-  		continue
-  	}
-  	bt.mu.RUnlock()
+		bt.mu.RLock()
+		if !bt.dirty {
+			bt.mu.RUnlock()
+			continue
+		}
+		bt.mu.RUnlock()
 
 		data, err := bt.Serialize()
 		if err != nil {
