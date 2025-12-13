@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 // testLogger implements the Logger interface for testing
 type testLogger struct {
 	buffer *bytes.Buffer
+	mu     sync.Mutex
 }
 
 func newTestLogger() *testLogger {
@@ -22,26 +24,38 @@ func newTestLogger() *testLogger {
 }
 
 func (l *testLogger) Debug(v ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.buffer.WriteString("DEBUG: " + fmt.Sprint(v...) + "\n")
 }
 
 func (l *testLogger) Debugf(format string, v ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.buffer.WriteString("DEBUG: " + fmt.Sprintf(format, v...) + "\n")
 }
 
 func (l *testLogger) Error(v ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.buffer.WriteString("ERROR: " + fmt.Sprint(v...) + "\n")
 }
 
 func (l *testLogger) Errorf(format string, v ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.buffer.WriteString("ERROR: " + fmt.Sprintf(format, v...) + "\n")
 }
 
 func (l *testLogger) Info(v ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.buffer.WriteString("INFO: " + fmt.Sprint(v...) + "\n")
 }
 
 func (l *testLogger) Infof(format string, v ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.buffer.WriteString("INFO: " + fmt.Sprintf(format, v...) + "\n")
 }
 

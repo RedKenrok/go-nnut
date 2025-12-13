@@ -1,64 +1,68 @@
-# B-Tree Bulk Operations
+# B-Tree Advanced Features
 
 ## Objective
-Optimize B-tree operations for bulk inserts, deletes, and queries to improve performance for batch workloads.
+Add advanced indexing features to the B-tree implementation to support complex query patterns and improved usability.
 
 ## Background
-The current B-tree implementation processes operations individually, which is inefficient for bulk operations. Bulk optimizations can significantly improve performance for data loading, migration, and batch processing scenarios.
+The current B-tree implementation provides basic indexing capabilities. Advanced features can enable more sophisticated queries, better performance for specific patterns, and enhanced functionality for complex applications.
 
 ## Current State Analysis
-- Each insert/delete processed individually
-- No batching of node operations
-- Sequential processing of bulk queries
-- Memory overhead for individual operations
+- Basic equality and range queries supported
+- No prefix matching or fuzzy search
+- Limited statistics and introspection
+- No composite or multi-column indexes
 
 ## Detailed Implementation Plan
 
-### 1. Bulk Insert Interface
-- **BulkInsert Method**: Accept multiple key-value pairs
-- **Batch Node Operations**: Group inserts to minimize splits
-- **Sequential Key Optimization**: Special handling for sorted input
-- **Rollback Support**: Ability to rollback failed bulk operations
+### 1. Prefix Search
+- **Prefix Matching**: Find all keys starting with a given prefix
+- **Efficient Traversal**: Navigate to prefix subtree and traverse
+- **Wildcard Support**: Basic pattern matching capabilities
+- **Auto-completion**: Support for prefix-based suggestions
 
-### 2. Bulk Delete Interface
-- **BulkDelete Method**: Accept multiple keys for deletion
-- **Batch Rebalancing**: Defer rebalancing until end of batch
-- **Efficient Key Lookup**: Optimized path for multiple deletions
-- **Memory Management**: Control memory usage during bulk deletes
+### 2. Fuzzy and Approximate Search
+- **Levenshtein Distance**: Approximate string matching
+- **Phonetic Matching**: Soundex or similar algorithms
+- **Threshold Configuration**: Configurable similarity thresholds
+- **Performance Optimization**: Index structures for fuzzy search
 
-### 3. Bulk Query Optimization
-- **Multi-point Queries**: Efficient handling of multiple equality queries
-- **Batch Range Queries**: Optimize for overlapping ranges
-- **Result Batching**: Stream results in chunks to control memory
+### 3. Composite Indexes
+- **Multi-field Keys**: Support for compound index keys
+- **Custom Comparators**: Pluggable comparison functions
+- **Index Projections**: Partial field indexing
+- **Query Optimization**: Choose optimal index for multi-field queries
 
-### 4. Tree Maintenance
-- **Deferred Splitting**: Batch node splits for better tree balance
-- **Bulk Rebalancing**: Optimize rebalancing for multiple changes
-- **Tree Compaction**: Periodic compaction after bulk operations
+### 4. Index Statistics and Introspection
+- **Tree Metrics**: Depth, node count, fill factor
+- **Query Statistics**: Track access patterns and performance
+- **Index Health**: Monitor balance and efficiency
+- **Visualization**: Tree structure inspection tools
 
-### 5. Performance Monitoring
-- **Batch Metrics**: Track batch size, processing time, memory usage
-- **Optimization Hints**: Provide guidance for optimal batch sizes
-- **Progress Tracking**: Report progress for long-running batches
+### 5. Specialized Index Types
+- **Spatial Indexes**: R-tree integration for geographic data
+- **Time-series Optimization**: Specialized for timestamp-based queries
+- **Full-text Search**: Integration with text indexing libraries
+- **Numeric Optimization**: Specialized handling for numeric ranges
 
-### 6. Integration with Store
-- **PutBatch Optimization**: Use bulk B-tree operations
-- **DeleteBatch Optimization**: Efficient batch deletions
-- **Query Optimization**: Batch multiple queries together
+### 6. Query Planning and Optimization
+- **Index Selection**: Automatic choice of best index for queries
+- **Query Rewriting**: Optimize complex queries using indexes
+- **Cost Estimation**: Estimate query cost for different plans
+- **Adaptive Indexing**: Dynamic index creation based on query patterns
 
 ## Testing and Validation
-- **Bulk Benchmarks**: Compare bulk vs individual operation performance
-- **Correctness Tests**: Verify results of bulk operations
-- **Memory Tests**: Monitor memory usage during bulk operations
-- **Failure Tests**: Test rollback and error handling
+- **Feature Tests**: Comprehensive testing for each advanced feature
+- **Performance Benchmarks**: Measure impact of advanced features
+- **Integration Tests**: Test with complex query scenarios
+- **Compatibility Tests**: Ensure backward compatibility
 
 ## Risks and Mitigations
-- **Complexity**: Thorough testing of batch logic
-- **Memory**: Monitor for increased memory usage
-- **Correctness**: Ensure batch operations maintain invariants
+- **Complexity**: Modular design to isolate advanced features
+- **Performance**: Optional features that don't impact basic operations
+- **Maintenance**: Clear separation of core vs advanced functionality
 
 ## Success Criteria
-- Significant performance improvement for bulk operations
-- Memory usage controlled during batch processing
-- All bulk operations maintain B-tree invariants
-- Seamless integration with existing Store batch methods
+- Advanced query patterns supported efficiently
+- Modular architecture allowing feature selection
+- No performance impact on basic operations
+- Comprehensive documentation and examples

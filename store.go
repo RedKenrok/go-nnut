@@ -2,6 +2,7 @@ package nnut
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 
 	"github.com/vmihailenco/msgpack/v5"
@@ -11,6 +12,7 @@ import (
 const (
 	MaxKeyLength        = 1024
 	MaxBucketNameLength = 255
+	btreeBucketName     = "__btree_indexes"
 )
 
 // Store represents a typed bucket for storing and retrieving values of type T.
@@ -18,10 +20,80 @@ const (
 type Store[T any] struct {
 	database     *DB
 	bucket       []byte
-	keyField     int                    // index of the field tagged with nnut:"key"
-	indexFields  map[string]int         // field name -> field index
-	fieldMap     map[string]int         // field name -> field index
-	btreeIndexes map[string]*BTree // field name -> B-tree index (new)
+	keyField     int               // index of the field tagged with nnut:"key"
+	indexFields  map[string]int    // field name -> field index
+	fieldMap     map[string]int    // field name -> field index
+	btreeIndexes map[string]*BTree // field name -> B-tree index
+}
+
+// persistBTreeIndexes saves any dirty B-tree indexes to persistent storage
+func (s *Store[T]) persistBTreeIndexes() error {
+	return s.database.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(btreeBucketName))
+		if err != nil {
+			return err
+		}
+
+		for fieldName, btree := range s.btreeIndexes {
+			btree.mu.RLock()
+			if !btree.dirty {
+				btree.mu.RUnlock()
+				continue
+			}
+			btree.mu.RUnlock()
+
+			data, err := btree.Serialize()
+			if err != nil {
+				return fmt.Errorf("failed to serialize B-tree for field %s: %w", fieldName, err)
+			}
+
+			key := string(s.bucket) + ":" + fieldName
+			err = bucket.Put([]byte(key), data)
+			if err != nil {
+				return fmt.Errorf("failed to persist B-tree for field %s: %w", fieldName, err)
+			}
+
+			btree.mu.Lock()
+			btree.dirty = false
+			btree.mu.Unlock()
+		}
+		return nil
+	})
+}
+
+// loadBTreeIndexes loads persisted B-tree indexes from storage
+func (s *Store[T]) loadBTreeIndexes() error {
+	return s.database.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(s.bucket)
+		if bucket == nil {
+			// No bucket yet
+			return nil
+		}
+
+		for fieldName := range s.indexFields {
+			key := "_btree_" + fieldName
+			data := bucket.Get([]byte(key))
+			if data == nil {
+				// No persisted index for this field
+				continue
+			}
+
+			btree, err := deserializeBTreeIndex(data)
+			if err != nil {
+				// Log error but continue - will rebuild from data
+				s.database.Logger().Warningf("Failed to load persisted B-tree for field %s: %v", fieldName, err)
+				continue
+			}
+
+			s.btreeIndexes[fieldName] = btree
+		}
+		return nil
+	})
+}
+
+// PersistIndexes saves any dirty B-tree indexes to persistent storage
+func (s *Store[T]) PersistIndexes() error {
+	return s.persistBTreeIndexes()
 }
 
 // NewStore creates a new store for type T with the given bucket name.
@@ -92,9 +164,9 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 		btreeIndexes: btreeIndexes,
 	}
 
-	// Populate B-tree indexes from existing data
-	if err := store.populateBTreeIndexes(); err != nil {
-		return nil, err
+	// Load persisted B-tree indexes
+	if err := store.loadBTreeIndexes(); err != nil {
+		return nil, fmt.Errorf("failed to load B-tree indexes: %w", err)
 	}
 
 	return store, nil

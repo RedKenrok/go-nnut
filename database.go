@@ -55,6 +55,7 @@ type DB struct {
 	operationsBufferMutex sync.Mutex
 	bytesInBuffer         uint64
 	currentEpoch          uint64
+	currentEpochMutex     sync.Mutex
 
 	flushChannel   chan struct{}
 	closeChannel   chan struct{}
@@ -316,6 +317,7 @@ func (db *DB) flushWAL() {
 // This ensures all pending operations are persisted to the database.
 func (db *DB) Flush() {
 	db.operationsBufferMutex.Lock()
+	db.currentEpochMutex.Lock()
 	operations := make([]operation, 0, len(db.operationsBuffer))
 	for _, op := range db.operationsBuffer {
 		op.Epoch = db.currentEpoch
@@ -324,6 +326,7 @@ func (db *DB) Flush() {
 	db.operationsBuffer = make(map[string]operation)
 	db.bytesInBuffer = 0
 	db.operationsBufferMutex.Unlock()
+	db.currentEpochMutex.Unlock()
 
 	if len(operations) == 0 {
 		return
@@ -359,8 +362,11 @@ func (db *DB) Flush() {
 	db.Logger().Infof("Successfully flushed %d operations to database", len(operations))
 
 	// Truncate WAL after successful flush
-	db.truncateWAL(db.currentEpoch)
+	db.currentEpochMutex.Lock()
+	committedEpoch := db.currentEpoch
 	db.currentEpoch++
+	db.currentEpochMutex.Unlock()
+	db.truncateWAL(committedEpoch)
 }
 
 func (db *DB) truncateWAL(committedEpoch uint64) {
@@ -461,7 +467,9 @@ func bufferKey(bucket []byte, key string) string {
 
 // writeOperation adds a single operation to WAL and buffer
 func (db *DB) writeOperation(ctx context.Context, op operation) error {
+	db.currentEpochMutex.Lock()
 	op.Epoch = db.currentEpoch
+	db.currentEpochMutex.Unlock()
 
 	// Encode operation
 	var opBuf bytes.Buffer
@@ -524,8 +532,11 @@ func (db *DB) writeOperations(ctx context.Context, ops []operation) error {
 		return nil
 	}
 
+	db.currentEpochMutex.Lock()
+	currentEpoch := db.currentEpoch
+	db.currentEpochMutex.Unlock()
 	for i := range ops {
-		ops[i].Epoch = db.currentEpoch
+		ops[i].Epoch = currentEpoch
 	}
 
 	// Encode all entries
