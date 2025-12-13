@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func BenchmarkQuery(b *testing.B) {
+func BenchmarkGetQuery(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -46,7 +46,7 @@ func BenchmarkQuery(b *testing.B) {
 	}
 }
 
-func BenchmarkQueryMultipleConditions(b *testing.B) {
+func BenchmarkGetQueryMultipleConditions(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -86,7 +86,7 @@ func BenchmarkQueryMultipleConditions(b *testing.B) {
 	}
 }
 
-func BenchmarkQuerySorting(b *testing.B) {
+func BenchmarkGetQuerySorting(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -125,7 +125,7 @@ func BenchmarkQuerySorting(b *testing.B) {
 	}
 }
 
-func BenchmarkQueryLimitOffset(b *testing.B) {
+func BenchmarkGetQueryLimitOffset(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -166,83 +166,7 @@ func BenchmarkQueryLimitOffset(b *testing.B) {
 	}
 }
 
-func BenchmarkQueryCount(b *testing.B) {
-	// Copy template database
-	os.Remove("benchmark.db")
-	os.Remove("benchmark.db.wal")
-	err := copyFile("benchmark_template.db", "benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to copy template DB: %v", err)
-	}
-	if _, err := os.Stat("benchmark_template.db.wal"); err == nil {
-		copyFile("benchmark_template.db.wal", "benchmark.db.wal")
-	}
-
-	db, err := Open("benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to open DB: %v", err)
-	}
-	defer db.Close()
-	defer os.Remove("benchmark.db")
-	defer os.Remove("benchmark.db.wal")
-
-	store, err := NewStore[TestUser](db, "users")
-	if err != nil {
-		b.Fatalf("Failed to create store: %v", err)
-	}
-
-	b.ResetTimer()
-	// Count users with a specific name
-	for i := 0; i < b.N; i++ {
-		_, err := store.CountQuery(context.Background(), &Query{
-			Conditions: []Condition{
-				{Field: "Name", Value: "Alice"},
-			},
-		})
-		if err != nil {
-			b.Fatalf("Failed to query count: %v", err)
-		}
-	}
-}
-
-func BenchmarkQueryCountIndex(b *testing.B) {
-	// Copy template database
-	os.Remove("benchmark.db")
-	os.Remove("benchmark.db.wal")
-	err := copyFile("benchmark_template.db", "benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to copy template DB: %v", err)
-	}
-	if _, err := os.Stat("benchmark_template.db.wal"); err == nil {
-		copyFile("benchmark_template.db.wal", "benchmark.db.wal")
-	}
-
-	db, err := Open("benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to open DB: %v", err)
-	}
-	defer db.Close()
-	defer os.Remove("benchmark.db")
-	defer os.Remove("benchmark.db.wal")
-
-	store, err := NewStore[TestUser](db, "users")
-	if err != nil {
-		b.Fatalf("Failed to create store: %v", err)
-	}
-
-	b.ResetTimer()
-	// Count all users using index
-	for i := 0; i < b.N; i++ {
-		_, err := store.CountQuery(context.Background(), &Query{
-			Index: "Name",
-		})
-		if err != nil {
-			b.Fatalf("Failed to query count index: %v", err)
-		}
-	}
-}
-
-func BenchmarkQueryNoConditions(b *testing.B) {
+func BenchmarkGetQueryNoConditions(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -278,7 +202,7 @@ func BenchmarkQueryNoConditions(b *testing.B) {
 	}
 }
 
-func BenchmarkQueryNonIndexedField(b *testing.B) {
+func BenchmarkGetQueryNonIndexedField(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -317,7 +241,7 @@ func BenchmarkQueryNonIndexedField(b *testing.B) {
 	}
 }
 
-func BenchmarkQueryComplexOperators(b *testing.B) {
+func BenchmarkGetQueryComplexOperators(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -357,7 +281,7 @@ func BenchmarkQueryComplexOperators(b *testing.B) {
 	}
 }
 
-func BenchmarkQueryLargeLimit(b *testing.B) {
+func BenchmarkGetQueryLargeLimit(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -396,7 +320,7 @@ func BenchmarkQueryLargeLimit(b *testing.B) {
 	}
 }
 
-func BenchmarkQueryOffsetOnly(b *testing.B) {
+func BenchmarkGetQueryOffsetOnly(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -435,7 +359,7 @@ func BenchmarkQueryOffsetOnly(b *testing.B) {
 	}
 }
 
-func BenchmarkQuerySortingAscending(b *testing.B) {
+func BenchmarkGetQuerySortingAscending(b *testing.B) {
 	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
@@ -470,117 +394,5 @@ func BenchmarkQuerySortingAscending(b *testing.B) {
 		if err != nil {
 			b.Fatalf("Failed to query sorting ascending: %v", err)
 		}
-	}
-}
-
-func BenchmarkQueryCountNoConditions(b *testing.B) {
-	// Copy template database
-	os.Remove("benchmark.db")
-	os.Remove("benchmark.db.wal")
-	err := copyFile("benchmark_template.db", "benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to copy template DB: %v", err)
-	}
-	if _, err := os.Stat("benchmark_template.db.wal"); err == nil {
-		copyFile("benchmark_template.db.wal", "benchmark.db.wal")
-	}
-
-	db, err := Open("benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to open DB: %v", err)
-	}
-	defer db.Close()
-	defer os.Remove("benchmark.db")
-	defer os.Remove("benchmark.db.wal")
-
-	store, err := NewStore[TestUser](db, "users")
-	if err != nil {
-		b.Fatalf("Failed to create store: %v", err)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := store.CountQuery(context.Background(), &Query{})
-		if err != nil {
-			b.Fatalf("Failed to query count no conditions: %v", err)
-		}
-	}
-}
-
-func BenchmarkQueryCountNonIndexed(b *testing.B) {
-	// Copy template database
-	os.Remove("benchmark.db")
-	os.Remove("benchmark.db.wal")
-	err := copyFile("benchmark_template.db", "benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to copy template DB: %v", err)
-	}
-	if _, err := os.Stat("benchmark_template.db.wal"); err == nil {
-		copyFile("benchmark_template.db.wal", "benchmark.db.wal")
-	}
-
-	db, err := Open("benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to open DB: %v", err)
-	}
-	defer db.Close()
-	defer os.Remove("benchmark.db")
-	defer os.Remove("benchmark.db.wal")
-
-	store, err := NewStore[TestUser](db, "users")
-	if err != nil {
-		b.Fatalf("Failed to create store: %v", err)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := store.CountQuery(context.Background(), &Query{
-			Conditions: []Condition{
-				{Field: "Age", Value: 25, Operator: GreaterThan},
-			},
-		})
-		if err != nil {
-			b.Fatalf("Failed to query count non-indexed: %v", err)
-		}
-	}
-}
-
-func BenchmarkDeleteQuery(b *testing.B) {
-	// Copy template database for each benchmark run
-	for i := 0; i < b.N; i++ {
-		os.Remove("benchmark.db")
-		os.Remove("benchmark.db.wal")
-		err := copyFile("benchmark_template.db", "benchmark.db")
-		if err != nil {
-			b.Fatalf("Failed to copy template DB: %v", err)
-		}
-		if _, err := os.Stat("benchmark_template.db.wal"); err == nil {
-			copyFile("benchmark_template.db.wal", "benchmark.db.wal")
-		}
-
-		db, err := Open("benchmark.db")
-		if err != nil {
-			b.Fatalf("Failed to open DB: %v", err)
-		}
-
-		store, err := NewStore[TestUser](db, "users")
-		if err != nil {
-			b.Fatalf("Failed to create store: %v", err)
-		}
-
-		// Delete a small subset to avoid depleting the database
-		_, err = store.DeleteQuery(context.Background(), &Query{
-			Conditions: []Condition{
-				{Field: "Name", Value: "Alice", Operator: Equals},
-			},
-			Limit: 1, // Only delete one to keep DB populated
-		})
-		if err != nil {
-			b.Fatalf("Failed to delete query: %v", err)
-		}
-
-		db.Close()
-		os.Remove("benchmark.db")
-		os.Remove("benchmark.db.wal")
 	}
 }
