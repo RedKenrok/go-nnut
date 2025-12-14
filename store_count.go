@@ -21,19 +21,8 @@ func (s *Store[T]) Count(ctx context.Context) (int, error) {
 			count = 0
 			return nil
 		}
-		count = bucket.Stats().KeyN
-
-		// Adjust for buffered operations
-		bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
-		for _, operation := range bufferedOperations {
-			exists := bucket.Get([]byte(operation.Key)) != nil
-			if operation.IsPut && !exists {
-				count++ // New key being added
-			} else if !operation.IsPut && exists {
-				count-- // Existing key being deleted
-			}
-		}
-
+		// Primary key index is always up to date with buffered operations
+		count = s.btreeIndexes[primaryKeyIndexName].CountKeys()
 		return nil
 	})
 	return count, err
@@ -102,17 +91,8 @@ func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 		}
 
 		// No conditions, no index, count all keys
-		count = bucket.Stats().KeyN
-
-		bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
-		for _, operation := range bufferedOperations {
-			exists := bucket.Get([]byte(operation.Key)) != nil
-			if operation.IsPut && !exists {
-				count++ // New key being added
-			} else if !operation.IsPut && exists {
-				count-- // Existing key being deleted
-			}
-		}
+		// Primary key index is always up to date with buffered operations
+		count = s.btreeIndexes[primaryKeyIndexName].CountKeys()
 		return nil
 	})
 	return count, err

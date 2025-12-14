@@ -42,7 +42,6 @@ func TestWALFlushInterval(t *testing.T) {
 		t.Fatal("WAL file should contain data before flush")
 	}
 	initialSize := len(walData)
-	t.Logf("WAL file size before automatic flush: %d bytes", initialSize)
 
 	// Wait for automatic flush to occur based on FlushInterval
 	time.Sleep(200 * time.Millisecond)
@@ -53,7 +52,6 @@ func TestWALFlushInterval(t *testing.T) {
 		t.Fatalf("Failed to read WAL file after automatic flush: %v", err)
 	}
 	finalSize := len(walDataAfter)
-	t.Logf("WAL file size after automatic flush: %d bytes", finalSize)
 
 	if finalSize >= initialSize {
 		t.Fatalf("WAL file should be truncated after automatic flush (initial: %d, final: %d)", initialSize, finalSize)

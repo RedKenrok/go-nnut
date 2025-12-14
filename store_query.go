@@ -424,18 +424,6 @@ func (s *Store[T]) getAllKeysTx(tx *bbolt.Tx, maxKeys int) []string {
 	return keys
 }
 
-// countAllKeysTx returns the count of all keys in the bucket
-func (s *Store[T]) countAllKeysTx(tx *bbolt.Tx) int {
-	count := 0
-	bucket := tx.Bucket(s.bucket)
-	if bucket == nil {
-		// Bucket not found, return 0
-		return count
-	}
-	// TODO: This does not keep the WAL / Operations buffer into account.
-	return bucket.Stats().KeyN
-}
-
 // getKeysFromIndexTx returns all keys sorted by the index
 func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sorting, maxKeys int) []string {
 	keys := s.btreeIndexes[index].GetAllKeys()

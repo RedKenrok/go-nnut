@@ -19,6 +19,11 @@ func (s *Store[T]) Get(ctx context.Context, key string) (T, error) {
 	s.database.Logger().Debugf("Getting record with key %s from bucket %s", key, s.bucket)
 	var result T
 
+	// Check primary key index first for fast rejection
+	if s.btreeIndexes[primaryKeyIndexName].Search(key) == nil {
+		return result, KeyNotFoundError{Bucket: string(s.bucket), Key: key}
+	}
+
 	// Check buffer for pending changes first
 	if op, exists := s.database.getLatestBufferedOperation(s.bucket, key); exists {
 		if op.IsPut {
@@ -81,10 +86,18 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 	results := make(map[string]T)
 	failed := make(map[string]error)
 
+	// Filter keys that exist in primary key index for fast rejection
+	var existingKeys []string
+	for _, key := range keys {
+		if s.btreeIndexes[primaryKeyIndexName].Search(key) != nil {
+			existingKeys = append(existingKeys, key)
+		}
+	}
+
 	// Check buffer for pending changes first
 	bufferDecoder := msgpack.GetDecoder()
 	defer msgpack.PutDecoder(bufferDecoder)
-	for _, key := range keys {
+	for _, key := range existingKeys {
 		if op, exists := s.database.getLatestBufferedOperation(s.bucket, key); exists {
 			if op.IsPut {
 				var item T
@@ -116,7 +129,7 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 		}
 		decoder := msgpack.GetDecoder()
 		defer msgpack.PutDecoder(decoder)
-		for _, key := range keys {
+		for _, key := range existingKeys {
 			// Skip if already handled by buffer
 			if _, alreadyHandled := results[key]; alreadyHandled {
 				continue

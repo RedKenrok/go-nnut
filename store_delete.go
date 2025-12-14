@@ -15,6 +15,11 @@ func (s *Store[T]) Delete(ctx context.Context, key string) error {
 		return err
 	}
 
+	// Check primary key index first for fast rejection
+	if s.btreeIndexes[primaryKeyIndexName].Search(key) == nil {
+		return nil
+	}
+
 	s.database.Logger().Debugf("Deleting record with key %s from bucket %s", key, s.bucket)
 	// Retrieve existing value to update indexes correctly
 	var oldIndexValues map[string]string
@@ -24,6 +29,9 @@ func (s *Store[T]) Delete(ctx context.Context, key string) error {
 	} else {
 		oldIndexValues = make(map[string]string)
 	}
+
+	// Update primary key index
+	s.btreeIndexes[primaryKeyIndexName].Delete(key, key)
 
 	// Update B-tree indexes
 	for name := range s.indexFields {
@@ -67,6 +75,9 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 		} else {
 			oldIndexValues = make(map[string]string)
 		}
+
+		// Update primary key index
+		s.btreeIndexes[primaryKeyIndexName].Delete(key, key)
 
 		// Collect B-tree index operations for batching
 		for name := range s.indexFields {
@@ -132,6 +143,7 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 	}
 	keysToDelete := candidateKeys[start:end]
 
+	// TODO: Should not directly apply this to the database. Instead go via the write ahead log!
 	// Perform deletions in a transaction for immediate consistency
 	err := s.database.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
@@ -163,6 +175,9 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 			if err := bucket.Delete([]byte(key)); err != nil {
 				continue
 			}
+
+			// Update primary key index
+			s.btreeIndexes[primaryKeyIndexName].Delete(key, key)
 
 			// Collect B-tree index operations for batching
 			oldIndexValues := s.extractIndexValues(item)

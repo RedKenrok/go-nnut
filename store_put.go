@@ -32,6 +32,15 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 
 	newIndexValues := s.extractIndexValues(value)
 
+	// Update primary key index
+	if oldValue, err := s.Get(ctx, key); err == nil {
+		oldKey := reflect.ValueOf(oldValue).Field(s.keyField).String()
+		if oldKey != key {
+			s.btreeIndexes[primaryKeyIndexName].Delete(oldKey, oldKey)
+		}
+	}
+	s.btreeIndexes[primaryKeyIndexName].Insert(key, key)
+
 	// Update B-tree indexes
 	for name := range s.indexFields {
 		oldValue := oldIndexValues[name]
@@ -103,6 +112,15 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 		}
 
 		newIndexValues := s.extractIndexValues(value)
+
+		// Update primary key index
+		if oldValue, exists := oldValues[key]; exists {
+			oldKey := reflect.ValueOf(oldValue).Field(s.keyField).String()
+			if oldKey != key {
+				s.btreeIndexes[primaryKeyIndexName].Delete(oldKey, oldKey)
+			}
+		}
+		s.btreeIndexes[primaryKeyIndexName].Insert(key, key)
 
 		// Collect B-tree index operations for batching
 		for name := range s.indexFields {
