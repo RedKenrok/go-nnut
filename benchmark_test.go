@@ -43,6 +43,7 @@ func TestSetupBenchmarkDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
+	defer store.Flush()
 
 	// Create diverse test data for realistic benchmarking
 	commonNames := []string{"John", "Jane", "Alice", "Bob", "Charlie", "David", "Eve", "Frank", "Grace", "Henry", "Ivy", "Jack", "Kate", "Liam", "Mia", "Noah", "Olivia", "Peter", "Quinn", "Ryan"}
@@ -57,7 +58,6 @@ func TestSetupBenchmarkDB(t *testing.T) {
 			t.Fatalf("Failed to put: %v", err)
 		}
 	}
-	store.Flush() // Persist B-tree indexes
 
 	// Leave the DB file behind for benchmarks to copy
 }

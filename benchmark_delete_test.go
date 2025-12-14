@@ -8,13 +8,8 @@ import (
 )
 
 func BenchmarkDelete(b *testing.B) {
-	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
-	err := copyFile("benchmark_template.db", "benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to copy template DB: %v", err)
-	}
 
 	db, err := Open("benchmark.db")
 	if err != nil {
@@ -29,9 +24,23 @@ func BenchmarkDelete(b *testing.B) {
 		b.Fatalf("Failed to create store: %v", err)
 	}
 
+	// Put b.N records
+	testUsers := make([]TestUser, b.N)
+	for i := 0; i < b.N; i++ {
+		testUsers[i] = TestUser{
+			UUID:  fmt.Sprintf("user_%d", i),
+			Name:  fmt.Sprintf("name_%d", i),
+			Email: fmt.Sprintf("email_%d@example.com", i),
+		}
+	}
+	err = store.PutBatch(context.Background(), testUsers)
+	if err != nil {
+		b.Fatalf("Failed to put batch: %v", err)
+	}
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		key := fmt.Sprintf("user_%d", i%userCount)
+		key := fmt.Sprintf("user_%d", i)
 		err := store.Delete(context.Background(), key)
 		if err != nil {
 			b.Fatalf("Failed to delete: %v", err)
@@ -40,13 +49,8 @@ func BenchmarkDelete(b *testing.B) {
 }
 
 func BenchmarkDeleteBatch(b *testing.B) {
-	// Copy template database
 	os.Remove("benchmark.db")
 	os.Remove("benchmark.db.wal")
-	err := copyFile("benchmark_template.db", "benchmark.db")
-	if err != nil {
-		b.Fatalf("Failed to copy template DB: %v", err)
-	}
 
 	db, err := Open("benchmark.db")
 	if err != nil {
@@ -61,13 +65,27 @@ func BenchmarkDeleteBatch(b *testing.B) {
 		b.Fatalf("Failed to create store: %v", err)
 	}
 
+	// Put b.N records
+	testUsers := make([]TestUser, b.N)
+	for i := 0; i < b.N; i++ {
+		testUsers[i] = TestUser{
+			UUID:  fmt.Sprintf("user_%d", i),
+			Name:  fmt.Sprintf("name_%d", i),
+			Email: fmt.Sprintf("email_%d@example.com", i),
+		}
+	}
+	err = store.PutBatch(context.Background(), testUsers)
+	if err != nil {
+		b.Fatalf("Failed to put batch: %v", err)
+	}
+
 	// Using a batch size allows us to compare directly with BenchmarkDelete
 	batchSize := 100
 	b.ResetTimer()
 	for i := 0; i < b.N/batchSize; i++ {
 		var keys []string
 		for j := 0; j < batchSize; j++ {
-			keys = append(keys, fmt.Sprintf("user_%d", (i*batchSize+j)%userCount))
+			keys = append(keys, fmt.Sprintf("user_%d", i*batchSize+j))
 		}
 		err := store.DeleteBatch(context.Background(), keys)
 		if err != nil {

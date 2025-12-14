@@ -238,6 +238,60 @@ func TestBatchOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to put batch: %v", err)
 	}
+
+	// Retrieve multiple records simultaneously
+	retrievedResults, err := store.GetBatch(context.Background(), []string{"1", "2", "4"})
+	if err != nil {
+		t.Fatalf("Failed to get batch: %v", err)
+	}
+	if len(retrievedResults) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(retrievedResults))
+	}
+	if retrievedResults["1"].Name != "Alice" || retrievedResults["2"].Name != "Bob" {
+		t.Fatal("Wrong batch get results")
+	}
+
+	// Remove multiple records in one operation
+	err = store.DeleteBatch(context.Background(), []string{"1", "3"})
+	if err != nil {
+		t.Fatalf("Failed to delete batch: %v", err)
+	}
+
+	// Verify only expected records remain
+	retrievedResults, err = store.GetBatch(context.Background(), []string{"1", "2", "3"})
+	if err != nil {
+		t.Fatalf("Failed to get batch after delete: %v", err)
+	}
+	if len(retrievedResults) != 1 || retrievedResults["2"].Name != "Bob" {
+		t.Fatal("Wrong results after batch delete")
+	}
+}
+
+func TestBatchOperationsFlushed(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), t.Name()+".db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open DB: %v", err)
+	}
+	defer db.Close()
+	defer os.Remove(dbPath)
+	defer os.Remove(dbPath + ".wal")
+
+	store, err := NewStore[TestUser](db, "users")
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	testUsers := []TestUser{
+		{UUID: "1", Name: "Alice", Email: "alice@example.com"},
+		{UUID: "2", Name: "Bob", Email: "bob@example.com"},
+		{UUID: "3", Name: "Charlie", Email: "charlie@example.com"},
+	}
+	err = store.PutBatch(context.Background(), testUsers)
+	if err != nil {
+		t.Fatalf("Failed to put batch: %v", err)
+	}
 	db.Flush()
 
 	// Retrieve multiple records simultaneously

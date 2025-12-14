@@ -142,12 +142,12 @@ func (s *Store[T]) loadBTreeIndexes() error {
 			primaryData = bucket.Get([]byte(primaryKey))
 		}
 		if primaryData == nil {
-  		// No persisted index, rebuild from database
-  		s.rebuildPrimaryKeyIndex(tx)
-    } else {
+			// No persisted index, rebuild from database
+			s.rebuildPrimaryKeyIndex(tx)
+		} else {
 			btree, err := deserializeBTree(primaryData)
 			if err == nil {
-			  s.btreeIndexes[primaryKeyIndexName] = btree
+				s.btreeIndexes[primaryKeyIndexName] = btree
 			} else {
 				s.database.Logger().Warningf("Failed to load persisted primary key B-tree: %v", err)
 				// Rebuild index from database
@@ -158,10 +158,10 @@ func (s *Store[T]) loadBTreeIndexes() error {
 		// Load secondary key indexes
 		for fieldName := range s.indexFields {
 			var secondaryData []byte
-  		if bucket != nil {
+			if bucket != nil {
 				secondaryKey := buildBTreeKey(bucketPrefix, fieldName)
 				secondaryData = bucket.Get([]byte(secondaryKey))
-  		}
+			}
 			if secondaryData == nil {
 				// No persisted index, rebuild from database
 				s.rebuildSecondaryIndex(fieldName, tx)
@@ -183,6 +183,7 @@ func (s *Store[T]) loadBTreeIndexes() error {
 
 // Flush persists any pending B-tree index changes to disk
 func (s *Store[T]) Flush() error {
+	// TODO: This should be applied via the buffer and Write Ahead Log system!
 	return s.database.Update(func(tx *bolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists([]byte(btreeBucketName))
 		if err != nil {

@@ -88,7 +88,7 @@ This document provides guidelines for AI agents working on the nnut Go library, 
 
 - **Linting**:
   - Run `go vet` to detect potential issues
-  - Use `gofmt -d .` to check formatting
+  - Fix formatting with `gofmt -s -w .`
   - Address all warnings and errors
 
 - **Dependencies**:
