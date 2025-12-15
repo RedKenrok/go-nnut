@@ -1225,7 +1225,7 @@ func FuzzQueryConditions(f *testing.F) {
 		// This should not panic or crash
 		_, _ = store.GetQuery(context.Background(), &Query{Conditions: []Condition{condition}})
 		_, _ = store.CountQuery(context.Background(), &Query{Conditions: []Condition{condition}})
-		_, _ = store.Count(context.Background()) // Test Count method
+		_, _ = store.Count(context.Background())                                                             // Test Count method
 		_, _ = store.DeleteQuery(context.Background(), &Query{Conditions: []Condition{condition}, Limit: 1}) // Test DeleteQuery with limit to avoid deleting everything
 	})
 }

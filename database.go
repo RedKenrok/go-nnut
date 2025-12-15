@@ -477,6 +477,38 @@ func (db *DB) Close() error {
 	return db.DB.Close()
 }
 
+// Export creates a backup of the database to the specified destination path.
+// It flushes pending operations and backs up the DB file.
+// The destination will be a valid nnut database that can be opened with Open or OpenWithConfig.
+func (db *DB) Export(destPath string) error {
+	// Validate destination path
+	if _, err := os.Stat(destPath); err == nil {
+		return FileSystemError{Path: destPath, Operation: "export", Err: os.ErrExist}
+	}
+
+	// Flush all pending operations to ensure DB is up-to-date
+	db.Flush()
+
+	// Create destination file for DB backup
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return FileSystemError{Path: destPath, Operation: "create", Err: err}
+	}
+	defer destFile.Close()
+
+	// Backup the DB using bbolt's transaction WriteTo for consistency
+	err = db.DB.View(func(tx *bbolt.Tx) error {
+		_, err := tx.WriteTo(destFile)
+		return err
+	})
+	if err != nil {
+		os.Remove(destPath) // Clean up on failure
+		return WrappedError{Operation: "backup_db", Err: err}
+	}
+
+	return nil
+}
+
 // bufferKey generates a unique key for the operations buffer
 func bufferKey(bucket []byte, key string) string {
 	return string(bucket) + "\x00" + key

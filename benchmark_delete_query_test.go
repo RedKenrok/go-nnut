@@ -34,7 +34,7 @@ func BenchmarkDeleteQuery(b *testing.B) {
 			UUID:  fmt.Sprintf("user_%d", i),
 			Name:  fmt.Sprintf("name_%d", i),
 			Email: fmt.Sprintf("email_%d@example.com", i),
-			Age:   i%int(math.Ceil(float64(b.N)/float64(batchSize))),
+			Age:   i % int(math.Ceil(float64(b.N)/float64(batchSize))),
 		}
 	}
 	err = store.PutBatch(context.Background(), testUsers)
@@ -45,9 +45,9 @@ func BenchmarkDeleteQuery(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := store.DeleteQuery(context.Background(), &Query{
-      Conditions: []Condition{
-        {Field: "Age", Value: i%int(math.Ceil(float64(b.N)/float64(batchSize)))},
-      },
+			Conditions: []Condition{
+				{Field: "Age", Value: i % int(math.Ceil(float64(b.N)/float64(batchSize)))},
+			},
 		})
 		if err != nil {
 			b.Fatalf("Failed to delete query: %v", err)

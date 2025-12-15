@@ -246,6 +246,61 @@ if err != nil {
 log.Printf("Deleted %d users", deletedCount)
 ```
 
+## Backup and Recovery
+
+nnut provides built-in backup functionality to create point-in-time copies of your database for disaster recovery or migration.
+
+### Creating a Backup
+
+Use the `Export` method to create a backup of the database:
+
+```go
+db, err := nnut.Open("mydata.db")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Create a backup
+err = db.Export("mydata_backup.db")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+This will:
+- Flush all pending operations to ensure the database is up-to-date
+- Create a consistent copy of the database file
+
+### Restoring from Backup
+
+To restore from a backup, simply open the backup file as a new database:
+
+```go
+// Open the backup as the new database
+db, err := nnut.Open("mydata_backup.db")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// The database is now restored with all data from the backup
+```
+
+### Best Practices
+
+- **Regular Backups**: Schedule regular exports to prevent data loss
+- **Offsite Storage**: Store backups in a separate location from the primary database
+- **Test Restores**: Periodically test restoring from backups to ensure they work
+- **Naming Convention**: Use timestamps in backup filenames for easy identification
+
+```go
+// Example: Backup with timestamp
+timestamp := time.Now().Format("20060102_150405")
+backupPath := fmt.Sprintf("mydata_backup_%s.db", timestamp)
+err = db.Export(backupPath)
+```
+
 ## Logging
 
 nnut integrates with bbolt's logging system to provide comprehensive logging support. You can configure custom logging to monitor database operations, debug issues, and track performance.
