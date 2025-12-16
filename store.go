@@ -124,6 +124,27 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 		return nil, fmt.Errorf("failed to load B-tree indexes: %w", err)
 	}
 
+	// Rebuild indexes if marked as dirty during WAL replay
+	bucketPrefix := bucketName + ":"
+	needsRebuild := false
+	for indexKey := range database.indexesNeedRebuild {
+		if strings.HasPrefix(indexKey, bucketPrefix) {
+			needsRebuild = true
+			break
+		}
+	}
+	if needsRebuild {
+		if err := store.rebuildIndexes(); err != nil {
+			return nil, fmt.Errorf("failed to rebuild indexes: %w", err)
+		}
+		// Remove the rebuild flags for this store's indexes
+		for indexKey := range database.indexesNeedRebuild {
+			if strings.HasPrefix(indexKey, bucketPrefix) {
+				delete(database.indexesNeedRebuild, indexKey)
+			}
+		}
+	}
+
 	return store, nil
 }
 
@@ -181,69 +202,6 @@ func (s *Store[T]) loadBTreeIndexes() error {
 	})
 }
 
-// Flush persists any pending B-tree index changes to disk
-func (s *Store[T]) Flush() error {
-	// TODO: This should be applied via the buffer and Write Ahead Log system!
-	return s.database.Update(func(tx *bolt.Tx) error {
-		bucket, err := tx.CreateBucketIfNotExists([]byte(btreeBucketName))
-		if err != nil {
-			return err
-		}
-
-		// Pre-compute bucket prefix for key construction
-		bucketPrefix := string(s.bucket) + ":"
-
-		for fieldName, btree := range s.btreeIndexes {
-			btree.mu.RLock()
-			if !btree.dirty {
-				btree.mu.RUnlock()
-				continue
-			}
-			btree.mu.RUnlock()
-
-			data, err := btree.Serialize()
-			if err != nil {
-				return fmt.Errorf("failed to serialize B-tree for field %s: %w", fieldName, err)
-			}
-
-			key := buildBTreeKey(bucketPrefix, fieldName)
-			err = bucket.Put([]byte(key), data)
-			if err != nil {
-				return fmt.Errorf("failed to persist B-tree for field %s: %w", fieldName, err)
-			}
-
-			btree.mu.Lock()
-			btree.dirty = false
-			btree.mu.Unlock()
-		}
-
-		// Persist primary key index
-		primaryKeyIndex := s.btreeIndexes[primaryKeyIndexName]
-		primaryKeyIndex.mu.RLock()
-		if primaryKeyIndex.dirty {
-			primaryKeyIndex.mu.RUnlock()
-
-			data, err := primaryKeyIndex.Serialize()
-			if err != nil {
-				return fmt.Errorf("failed to serialize primary key B-tree: %w", err)
-			}
-
-			key := buildBTreeKey(bucketPrefix, primaryKeyIndexName)
-			err = bucket.Put([]byte(key), data)
-			if err != nil {
-				return fmt.Errorf("failed to persist primary key B-tree: %w", err)
-			}
-
-			primaryKeyIndex.mu.Lock()
-			primaryKeyIndex.dirty = false
-			primaryKeyIndex.mu.Unlock()
-		} else {
-			primaryKeyIndex.mu.RUnlock()
-		}
-		return nil
-	})
-}
-
 // Gather index field values to maintain secondary index consistency
 func (s *Store[T]) extractIndexValues(value T) map[string]string {
 	structValue := reflect.ValueOf(value)
@@ -264,10 +222,63 @@ func (s *Store[T]) rebuildPrimaryKeyIndex(tx *bolt.Tx) {
 		return
 	}
 	cursor := bucket.Cursor()
-	for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+		if v == nil {
+			continue
+		}
 		key := string(k)
 		s.btreeIndexes[primaryKeyIndexName].Insert(key, key)
 	}
+}
+
+// rebuildIndexes rebuilds all B-tree indexes from the current database state
+func (s *Store[T]) rebuildIndexes() error {
+	return s.database.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(s.bucket)
+		if bucket == nil {
+			return nil
+		}
+
+		// Clear existing indexes
+		for name := range s.btreeIndexes {
+			s.btreeIndexes[name] = NewBTreeIndex(32)
+		}
+
+		cursor := bucket.Cursor()
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			if v == nil {
+				continue
+			}
+
+			// Decode the record
+			var item T
+			decoder := msgpack.GetDecoder()
+			decoder.Reset(bytes.NewReader(v))
+			err := decoder.Decode(&item)
+			msgpack.PutDecoder(decoder)
+			if err != nil {
+				continue // Skip corrupted records
+			}
+
+			key := string(k)
+
+			// Rebuild primary key index
+			s.btreeIndexes[primaryKeyIndexName].Insert(key, key)
+
+			// Rebuild secondary indexes
+			structValue := reflect.ValueOf(item)
+			for fieldName, fieldIndex := range s.indexFields {
+				fieldValue := structValue.Field(fieldIndex)
+				if fieldValue.Kind() == reflect.String {
+					indexValue := fieldValue.String()
+					if indexValue != "" {
+						s.btreeIndexes[fieldName].Insert(indexValue, key)
+					}
+				}
+			}
+		}
+		return nil
+	})
 }
 
 // rebuildSecondaryIndex rebuilds a secondary index for the given field from the database bucket

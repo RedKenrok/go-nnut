@@ -34,14 +34,37 @@ func (s *Store[T]) Delete(ctx context.Context, key string) error {
 		}
 	}
 
-	operation := operation{
+	// Collect modified indexes for buffering
+	modifiedIndexes := []string{primaryKeyIndexName} // Primary key is always modified
+	for name := range s.indexFields {
+		if oldIndexValues[name] != "" {
+			modifiedIndexes = append(modifiedIndexes, name)
+		}
+	}
+
+	// Create operations: data operation + index operations
+	ops := make([]operation, 1+len(modifiedIndexes))
+	ops[0] = operation{
 		Bucket: s.bucket,
 		Key:    key,
 		Value:  nil,
-		IsPut:  false,
+		Type:   OpDelete,
 	}
 
-	return s.database.writeOperation(ctx, operation)
+	for i, indexName := range modifiedIndexes {
+		indexData, err := s.btreeIndexes[indexName].Serialize()
+		if err != nil {
+			return WrappedError{Operation: "serialize_index", Bucket: string(s.bucket), Key: indexName, Err: err}
+		}
+		ops[i+1] = operation{
+			Bucket: []byte(btreeBucketName),
+			Key:    buildBTreeKey(string(s.bucket), indexName),
+			Value:  indexData,
+			Type:   OpIndexDirty,
+		}
+	}
+
+	return s.database.writeOperations(ctx, ops)
 }
 
 // DeleteBatch removes multiple records by their keys.
@@ -88,7 +111,7 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 			Bucket: s.bucket,
 			Key:    key,
 			Value:  nil,
-			IsPut:  false,
+			Type:   OpDelete,
 		})
 	}
 
@@ -181,7 +204,7 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 			Bucket: s.bucket,
 			Key:    key,
 			Value:  nil,
-			IsPut:  false,
+			Type:   OpDelete,
 		})
 	}
 

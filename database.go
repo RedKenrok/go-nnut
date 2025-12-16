@@ -57,16 +57,26 @@ type DB struct {
 	currentEpoch          uint64
 	currentEpochMutex     sync.Mutex
 
+	indexesNeedRebuild map[string]bool // indexKey -> needs rebuild (set during WAL replay)
+
 	flushChannel   chan struct{}
 	closeChannel   chan struct{}
 	closeWaitGroup sync.WaitGroup
 }
 
+type OperationType int
+
+const (
+	OpPut OperationType = iota
+	OpDelete
+	OpIndexDirty // Lightweight marker indicating index needs rebuild
+)
+
 type operation struct {
 	Bucket []byte
 	Key    string
 	Value  []byte
-	IsPut  bool
+	Type   OperationType
 	Epoch  uint64
 }
 
@@ -158,13 +168,14 @@ func OpenWithConfig(path string, config *Config) (*DB, error) {
 		return nil, FileSystemError{Path: path, Operation: "open", Err: err}
 	}
 	databaseInstance := &DB{
-		DB:               database,
-		config:           config,
-		logger:           &logger,
-		operationsBuffer: make(map[string]operation),
-		currentEpoch:     1,
-		flushChannel:     make(chan struct{}, config.FlushChannelSize),
-		closeChannel:     make(chan struct{}),
+		DB:                 database,
+		config:             config,
+		logger:             &logger,
+		operationsBuffer:   make(map[string]operation),
+		currentEpoch:       1,
+		indexesNeedRebuild: make(map[string]bool),
+		flushChannel:       make(chan struct{}, config.FlushChannelSize),
+		closeChannel:       make(chan struct{}),
 	}
 
 	// Recover uncommitted operations from previous session to ensure data consistency
@@ -264,28 +275,35 @@ func (db *DB) replayWAL() error {
 
 		operation := entry.Operation
 
-		// Reapply operations to restore database state
-		err = db.Update(func(tx *bbolt.Tx) error {
-			b, err := tx.CreateBucketIfNotExists(operation.Bucket)
-			if err != nil {
-				return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
-			}
-			if operation.IsPut {
-				err = b.Put([]byte(operation.Key), operation.Value)
-				if err != nil {
-					return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
-				}
-			} else {
-				err = b.Delete([]byte(operation.Key))
-				if err != nil {
-					return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
-				}
-			}
+		// Mark indexes as needing rebuild if dirty marker found
+		if operation.Type == OpIndexDirty {
+			db.indexesNeedRebuild[operation.Key] = true
+		}
 
-			return nil
-		})
-		if err != nil {
-			return WrappedError{Operation: "replay_wal", Err: err}
+		// Reapply data operations to restore database state
+		if operation.Type == OpPut || operation.Type == OpDelete {
+			err = db.Update(func(tx *bbolt.Tx) error {
+				b, err := tx.CreateBucketIfNotExists(operation.Bucket)
+				if err != nil {
+					return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
+				}
+				if operation.Type == OpPut {
+					err = b.Put([]byte(operation.Key), operation.Value)
+					if err != nil {
+						return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
+					}
+				} else if operation.Type == OpDelete {
+					err = b.Delete([]byte(operation.Key))
+					if err != nil {
+						return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
+					}
+				}
+
+				return nil
+			})
+			if err != nil {
+				return WrappedError{Operation: "replay_wal", Err: err}
+			}
 		}
 		operationIndex++
 	}
@@ -340,12 +358,12 @@ func (db *DB) Flush() {
 			if err != nil {
 				return err
 			}
-			if operation.IsPut {
+			if operation.Type == OpPut || operation.Type == OpIndexDirty {
 				err = b.Put([]byte(operation.Key), operation.Value)
 				if err != nil {
 					return err
 				}
-			} else {
+			} else if operation.Type == OpDelete {
 				err = b.Delete([]byte(operation.Key))
 				if err != nil {
 					return err
@@ -520,6 +538,11 @@ func (db *DB) writeOperation(ctx context.Context, op operation) error {
 	op.Epoch = db.currentEpoch
 	db.currentEpochMutex.Unlock()
 
+	// For WAL efficiency, omit large index data from serialization
+	if op.Type == OpIndexDirty {
+		op.Value = nil // Index data is in buffer, not WAL
+	}
+
 	// Encode operation
 	var opBuf bytes.Buffer
 	opEncoder := msgpack.NewEncoder(&opBuf)
@@ -593,6 +616,11 @@ func (db *DB) writeOperations(ctx context.Context, ops []operation) error {
 	walEncoder := msgpack.NewEncoder(&walBuffer)
 	totalBytes := uint64(0)
 	for _, op := range ops {
+		// For WAL efficiency, omit large index data from serialization
+		if op.Type == OpIndexDirty {
+			op.Value = nil // Index data is in buffer, not WAL
+		}
+
 		// Encode operation
 		var opBuf bytes.Buffer
 		opEncoder := msgpack.NewEncoder(&opBuf)

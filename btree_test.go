@@ -280,7 +280,7 @@ func TestBTreeIndex_Persistence(t *testing.T) {
 	}
 
 	// Close and reopen database
-	store.Flush()
+	db.Flush()
 	db.Close()
 	db, err = Open(dbPath)
 	if err != nil {

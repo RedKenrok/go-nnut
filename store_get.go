@@ -26,7 +26,7 @@ func (s *Store[T]) Get(ctx context.Context, key string) (T, error) {
 
 	// Check buffer for pending changes first
 	if op, exists := s.database.getLatestBufferedOperation(s.bucket, key); exists {
-		if op.IsPut {
+		if op.Type == OpPut {
 			// Apply buffered put operation
 			decoder := msgpack.GetDecoder()
 			defer msgpack.PutDecoder(decoder)
@@ -99,7 +99,7 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 	defer msgpack.PutDecoder(bufferDecoder)
 	for _, key := range existingKeys {
 		if op, exists := s.database.getLatestBufferedOperation(s.bucket, key); exists {
-			if op.IsPut {
+			if op.Type == OpPut {
 				var item T
 				bufferDecoder.Reset(bytes.NewReader(op.Value))
 				err := bufferDecoder.Decode(&item)

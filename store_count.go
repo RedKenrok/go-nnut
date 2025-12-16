@@ -59,7 +59,7 @@ func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 			// We only need to handle Delete operations that remove keys from results
 			bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
 			for _, operation := range bufferedOperations {
-				if !operation.IsPut {
+				if operation.Type == OpDelete {
 					// For Delete operations, check if the key was in our candidates
 					for _, candidateKey := range candidateKeys {
 						if operation.Key == candidateKey {
@@ -80,7 +80,7 @@ func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 			// We only need to handle Delete operations that remove keys from the index
 			bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
 			for _, operation := range bufferedOperations {
-				if !operation.IsPut {
+				if operation.Type == OpDelete {
 					// For Delete operations, check if the key exists in the index
 					if s.btreeIndexes[query.Index].Search(operation.Key) != nil {
 						count-- // Existing key being deleted from index

@@ -61,14 +61,39 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 		return WrappedError{Operation: "marshal", Bucket: string(s.bucket), Key: key, Err: err}
 	}
 
-	operation := operation{
+	// Collect modified indexes for buffering
+	modifiedIndexes := []string{primaryKeyIndexName} // Primary key is always modified
+	for name := range s.indexFields {
+		oldValue := oldIndexValues[name]
+		newValue := newIndexValues[name]
+		if oldValue != newValue {
+			modifiedIndexes = append(modifiedIndexes, name)
+		}
+	}
+
+	// Create operations: data operation + index operations
+	ops := make([]operation, 1+len(modifiedIndexes))
+	ops[0] = operation{
 		Bucket: s.bucket,
 		Key:    key,
 		Value:  data,
-		IsPut:  true,
+		Type:   OpPut,
 	}
 
-	return s.database.writeOperation(ctx, operation)
+	for i, indexName := range modifiedIndexes {
+		indexData, err := s.btreeIndexes[indexName].Serialize()
+		if err != nil {
+			return WrappedError{Operation: "serialize_index", Bucket: string(s.bucket), Key: indexName, Err: err}
+		}
+		ops[i+1] = operation{
+			Bucket: []byte(btreeBucketName),
+			Key:    buildBTreeKey(string(s.bucket), indexName),
+			Value:  indexData,
+			Type:   OpIndexDirty,
+		}
+	}
+
+	return s.database.writeOperations(ctx, ops)
 }
 
 // PutBatch stores multiple records in a single batch operation.
@@ -152,7 +177,7 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 			Bucket: s.bucket,
 			Key:    key,
 			Value:  data,
-			IsPut:  true,
+			Type:   OpPut,
 		}
 		operations = append(operations, operation)
 		bufferPool.Put(buf)
