@@ -57,6 +57,9 @@ type DB struct {
 	currentEpoch          uint64
 	currentEpochMutex     sync.Mutex
 
+	indexes      map[string]*bTree // indexKey -> BTree for serialization on flush
+	indexesMutex sync.RWMutex
+
 	indexesNeedRebuild map[string]bool // indexKey -> needs rebuild (set during WAL replay)
 
 	flushChannel   chan struct{}
@@ -67,9 +70,9 @@ type DB struct {
 type OperationType int
 
 const (
-	OpPut OperationType = iota
-	OpDelete
-	OpIndexDirty // Lightweight marker indicating index needs rebuild
+	OperationPut OperationType = iota
+	OperationDelete
+	OperationIndex
 )
 
 type operation struct {
@@ -173,6 +176,7 @@ func OpenWithConfig(path string, config *Config) (*DB, error) {
 		logger:             &logger,
 		operationsBuffer:   make(map[string]operation),
 		currentEpoch:       1,
+		indexes:            make(map[string]*bTree),
 		indexesNeedRebuild: make(map[string]bool),
 		flushChannel:       make(chan struct{}, config.FlushChannelSize),
 		closeChannel:       make(chan struct{}),
@@ -212,13 +216,13 @@ func (db *DB) getLatestBufferedOperation(bucket []byte, key string) (operation, 
 func (db *DB) getBufferedOperationsForBucket(bucket []byte) []operation {
 	db.operationsBufferMutex.Lock()
 	defer db.operationsBufferMutex.Unlock()
-	var ops []operation
-	for _, op := range db.operationsBuffer {
-		if bytes.Equal(op.Bucket, bucket) {
-			ops = append(ops, op)
+	var operations []operation
+	for _, operation := range db.operationsBuffer {
+		if bytes.Equal(operation.Bucket, bucket) {
+			operations = append(operations, operation)
 		}
 	}
-	return ops
+	return operations
 }
 
 func (db *DB) Logger() bbolt.Logger {
@@ -257,15 +261,15 @@ func (db *DB) replayWAL() error {
 		}
 
 		// Verify checksum
-		var opBuf bytes.Buffer
-		opEncoder := msgpack.NewEncoder(&opBuf)
-		err = opEncoder.Encode(entry.Operation)
+		var operationBuffer bytes.Buffer
+		operationEncoder := msgpack.NewEncoder(&operationBuffer)
+		err = operationEncoder.Encode(entry.Operation)
 		if err != nil {
 			db.Logger().Errorf("Error re-encoding operation for checksum: %v", err)
 			os.Remove(db.config.WALPath)
 			break
 		}
-		encodedOp := opBuf.Bytes()
+		encodedOp := operationBuffer.Bytes()
 		computedChecksum := crc32.ChecksumIEEE(encodedOp)
 		if computedChecksum != entry.Checksum {
 			db.Logger().Errorf("WAL checksum mismatch at operation %d", operationIndex)
@@ -276,24 +280,24 @@ func (db *DB) replayWAL() error {
 		operation := entry.Operation
 
 		// Mark indexes as needing rebuild if dirty marker found
-		if operation.Type == OpIndexDirty {
+		if operation.Type == OperationIndex {
 			db.indexesNeedRebuild[operation.Key] = true
 		}
 
 		// Reapply data operations to restore database state
-		if operation.Type == OpPut || operation.Type == OpDelete {
-			err = db.Update(func(tx *bbolt.Tx) error {
-				b, err := tx.CreateBucketIfNotExists(operation.Bucket)
+		if operation.Type == OperationPut || operation.Type == OperationDelete {
+			err = db.Update(func(transaction *bbolt.Tx) error {
+				bucket, err := transaction.CreateBucketIfNotExists(operation.Bucket)
 				if err != nil {
 					return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
 				}
-				if operation.Type == OpPut {
-					err = b.Put([]byte(operation.Key), operation.Value)
+				if operation.Type == OperationPut {
+					err = bucket.Put([]byte(operation.Key), operation.Value)
 					if err != nil {
 						return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
 					}
-				} else if operation.Type == OpDelete {
-					err = b.Delete([]byte(operation.Key))
+				} else if operation.Type == OperationDelete {
+					err = bucket.Delete([]byte(operation.Key))
 					if err != nil {
 						return WALReplayError{WALPath: db.config.WALPath, OperationIndex: operationIndex, Err: err}
 					}
@@ -337,9 +341,9 @@ func (db *DB) Flush() {
 	db.operationsBufferMutex.Lock()
 	db.currentEpochMutex.Lock()
 	operations := make([]operation, 0, len(db.operationsBuffer))
-	for _, op := range db.operationsBuffer {
-		op.Epoch = db.currentEpoch
-		operations = append(operations, op)
+	for _, operation := range db.operationsBuffer {
+		operation.Epoch = db.currentEpoch
+		operations = append(operations, operation)
 	}
 	db.operationsBuffer = make(map[string]operation)
 	db.bytesInBuffer = 0
@@ -352,21 +356,36 @@ func (db *DB) Flush() {
 
 	db.Logger().Infof("Flushing %d operations to database", len(operations))
 
-	err := db.Update(func(tx *bbolt.Tx) error {
+	err := db.Update(func(transaction *bbolt.Tx) error {
 		for _, operation := range operations {
-			b, err := tx.CreateBucketIfNotExists(operation.Bucket)
+			bucket, err := transaction.CreateBucketIfNotExists(operation.Bucket)
 			if err != nil {
 				return err
 			}
-			if operation.Type == OpPut || operation.Type == OpIndexDirty {
-				err = b.Put([]byte(operation.Key), operation.Value)
+			if operation.Type == OperationPut {
+				err = bucket.Put([]byte(operation.Key), operation.Value)
 				if err != nil {
 					return err
 				}
-			} else if operation.Type == OpDelete {
-				err = b.Delete([]byte(operation.Key))
+			} else if operation.Type == OperationDelete {
+				err = bucket.Delete([]byte(operation.Key))
 				if err != nil {
 					return err
+				}
+			} else if operation.Type == OperationIndex {
+				// Serialize the current BTree
+				db.indexesMutex.RLock()
+				btree, exists := db.indexes[operation.Key]
+				db.indexesMutex.RUnlock()
+				if exists {
+					data, err := btree.serialize()
+					if err != nil {
+						return err
+					}
+					err = bucket.Put([]byte(operation.Key), data)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -410,7 +429,7 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 	}
 
 	// Decode and filter operations
-	var remainingOps []operation
+	var remainingOperations []operation
 	decoder := msgpack.GetDecoder()
 	defer msgpack.PutDecoder(decoder)
 	decoder.Reset(bytes.NewReader(data))
@@ -426,29 +445,29 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 			break
 		}
 		// Verify checksum
-		var opBuf bytes.Buffer
-		opEncoder := msgpack.NewEncoder(&opBuf)
-		err = opEncoder.Encode(entry.Operation)
+		var operationBuffer bytes.Buffer
+		operationEncoder := msgpack.NewEncoder(&operationBuffer)
+		err = operationEncoder.Encode(entry.Operation)
 		if err != nil {
 			db.Logger().Errorf("Error re-encoding operation for checksum: %v", err)
 			continue
 		}
-		encodedOp := opBuf.Bytes()
-		computedChecksum := crc32.ChecksumIEEE(encodedOp)
+		encodedOperation := operationBuffer.Bytes()
+		computedChecksum := crc32.ChecksumIEEE(encodedOperation)
 		if computedChecksum != entry.Checksum {
 			db.Logger().Errorf("WAL checksum mismatch during truncation")
 			continue
 		}
 		if entry.Operation.Epoch > committedEpoch {
-			remainingOps = append(remainingOps, entry.Operation)
+			remainingOperations = append(remainingOperations, entry.Operation)
 		}
 	}
 
 	// Encode remaining operations
-	var buf bytes.Buffer
-	encoder := msgpack.NewEncoder(&buf)
-	for _, op := range remainingOps {
-		if err := encoder.Encode(op); err != nil {
+	var buffer bytes.Buffer
+	encoder := msgpack.NewEncoder(&buffer)
+	for _, operation := range remainingOperations {
+		if err := encoder.Encode(operation); err != nil {
 			db.Logger().Errorf("Error encoding remaining operation: %v", err)
 			// On error, don't truncate
 			db.walFile, err = os.OpenFile(db.config.WALPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -460,7 +479,7 @@ func (db *DB) truncateWAL(committedEpoch uint64) {
 	}
 
 	// Write back to WAL
-	err = os.WriteFile(db.config.WALPath, buf.Bytes(), 0644)
+	err = os.WriteFile(db.config.WALPath, buffer.Bytes(), 0644)
 	if err != nil {
 		db.Logger().Errorf("Error writing truncated WAL: %v", err)
 		// Reopen
@@ -498,29 +517,29 @@ func (db *DB) Close() error {
 // Export creates a backup of the database to the specified destination path.
 // It flushes pending operations and backs up the DB file.
 // The destination will be a valid nnut database that can be opened with Open or OpenWithConfig.
-func (db *DB) Export(destPath string) error {
+func (db *DB) Export(destinationPath string) error {
 	// Validate destination path
-	if _, err := os.Stat(destPath); err == nil {
-		return FileSystemError{Path: destPath, Operation: "export", Err: os.ErrExist}
+	if _, err := os.Stat(destinationPath); err == nil {
+		return FileSystemError{Path: destinationPath, Operation: "export", Err: os.ErrExist}
 	}
 
 	// Flush all pending operations to ensure DB is up-to-date
 	db.Flush()
 
 	// Create destination file for DB backup
-	destFile, err := os.Create(destPath)
+	destinationFile, err := os.Create(destinationPath)
 	if err != nil {
-		return FileSystemError{Path: destPath, Operation: "create", Err: err}
+		return FileSystemError{Path: destinationPath, Operation: "create", Err: err}
 	}
-	defer destFile.Close()
+	defer destinationFile.Close()
 
 	// Backup the DB using bbolt's transaction WriteTo for consistency
-	err = db.DB.View(func(tx *bbolt.Tx) error {
-		_, err := tx.WriteTo(destFile)
+	err = db.DB.View(func(transaction *bbolt.Tx) error {
+		_, err := transaction.WriteTo(destinationFile)
 		return err
 	})
 	if err != nil {
-		os.Remove(destPath) // Clean up on failure
+		os.Remove(destinationPath) // Clean up on failure
 		return WrappedError{Operation: "backup_db", Err: err}
 	}
 
@@ -532,40 +551,18 @@ func bufferKey(bucket []byte, key string) string {
 	return string(bucket) + "\x00" + key
 }
 
-// writeOperation adds a single operation to WAL and buffer
-func (db *DB) writeOperation(ctx context.Context, op operation) error {
+// writeOperations adds multiple operations to WAL and buffer atomically
+func (db *DB) writeOperations(ctx context.Context, operations []operation) error {
+	if len(operations) == 0 {
+		return nil
+	}
+
 	db.currentEpochMutex.Lock()
-	op.Epoch = db.currentEpoch
+	currentEpoch := db.currentEpoch
 	db.currentEpochMutex.Unlock()
-
-	// For WAL efficiency, omit large index data from serialization
-	if op.Type == OpIndexDirty {
-		op.Value = nil // Index data is in buffer, not WAL
+	for i := range operations {
+		operations[i].Epoch = currentEpoch
 	}
-
-	// Encode operation
-	var opBuf bytes.Buffer
-	opEncoder := msgpack.NewEncoder(&opBuf)
-	err := opEncoder.Encode(op)
-	if err != nil {
-		return WrappedError{Operation: "encode operation", Err: err}
-	}
-	encodedOp := opBuf.Bytes()
-
-	// Compute checksum
-	checksum := crc32.ChecksumIEEE(encodedOp)
-
-	// Create WAL entry
-	entry := walEntry{Operation: op, Checksum: checksum}
-
-	// Encode entry
-	var entryBuf bytes.Buffer
-	entryEncoder := msgpack.NewEncoder(&entryBuf)
-	err = entryEncoder.Encode(entry)
-	if err != nil {
-		return WrappedError{Operation: "encode WAL entry", Err: err}
-	}
-	encodedEntry := entryBuf.Bytes()
 
 	select {
 	case <-ctx.Done():
@@ -573,19 +570,15 @@ func (db *DB) writeOperation(ctx context.Context, op operation) error {
 	default:
 	}
 
-	// Write to WAL file
-	db.walMutex.Lock()
-	_, err = db.walFile.Write(encodedEntry)
-	db.walMutex.Unlock()
-	if err != nil {
-		return FileSystemError{Path: db.config.WALPath, Operation: "write", Err: err}
-	}
-
-	// Add to buffer with deduplication
+	// Add to buffer with deduplication (preserve full data)
 	db.operationsBufferMutex.Lock()
-	key := bufferKey(op.Bucket, op.Key)
-	db.operationsBuffer[key] = op
-	db.bytesInBuffer += uint64(len(encodedEntry))
+	bufferBytes := uint64(0)
+	for _, operation := range operations {
+		key := bufferKey(operation.Bucket, operation.Key)
+		db.operationsBuffer[key] = operation
+		bufferBytes += uint64(len(operation.Value))
+	}
+	db.bytesInBuffer += bufferBytes
 	shouldFlush := db.bytesInBuffer >= uint64(db.config.MaxBufferBytes)
 	db.operationsBufferMutex.Unlock()
 
@@ -595,66 +588,39 @@ func (db *DB) writeOperation(ctx context.Context, op operation) error {
 		default:
 		}
 	}
-	return nil
-}
 
-// writeOperations adds multiple operations to WAL and buffer atomically
-func (db *DB) writeOperations(ctx context.Context, ops []operation) error {
-	if len(ops) == 0 {
-		return nil
-	}
-
-	db.currentEpochMutex.Lock()
-	currentEpoch := db.currentEpoch
-	db.currentEpochMutex.Unlock()
-	for i := range ops {
-		ops[i].Epoch = currentEpoch
-	}
-
-	// Encode all entries
+	// Encode all entries for WAL
 	var walBuffer bytes.Buffer
 	walEncoder := msgpack.NewEncoder(&walBuffer)
-	totalBytes := uint64(0)
-	for _, op := range ops {
+	for _, operation := range operations {
 		// For WAL efficiency, omit large index data from serialization
-		if op.Type == OpIndexDirty {
-			op.Value = nil // Index data is in buffer, not WAL
+		walOperation := operation
+		if walOperation.Type == OperationIndex {
+			walOperation.Value = nil // Index data is in buffer, not WAL
 		}
 
 		// Encode operation
-		var opBuf bytes.Buffer
-		opEncoder := msgpack.NewEncoder(&opBuf)
-		err := opEncoder.Encode(op)
+		var operationBuffer bytes.Buffer
+		operationEncoder := msgpack.NewEncoder(&operationBuffer)
+		err := operationEncoder.Encode(walOperation)
 		if err != nil {
 			return WrappedError{Operation: "encode operation batch", Err: err}
 		}
-		encodedOp := opBuf.Bytes()
+		encodedOperator := operationBuffer.Bytes()
 
 		// Compute checksum
-		checksum := crc32.ChecksumIEEE(encodedOp)
+		checksum := crc32.ChecksumIEEE(encodedOperator)
 
 		// Create WAL entry
-		entry := walEntry{Operation: op, Checksum: checksum}
+		entry := walEntry{Operation: walOperation, Checksum: checksum}
 
 		// Encode entry
 		err = walEncoder.Encode(entry)
 		if err != nil {
 			return WrappedError{Operation: "encode WAL entry batch", Err: err}
 		}
-
-		// Measure size
-		var tempBuf bytes.Buffer
-		tempEncoder := msgpack.NewEncoder(&tempBuf)
-		tempEncoder.Encode(entry)
-		totalBytes += uint64(tempBuf.Len())
 	}
 	walBytes := walBuffer.Bytes()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
 
 	// Write batch to WAL file
 	db.walMutex.Lock()
@@ -664,21 +630,5 @@ func (db *DB) writeOperations(ctx context.Context, ops []operation) error {
 		return FileSystemError{Path: db.config.WALPath, Operation: "write_batch", Err: err}
 	}
 
-	// Add to buffer with deduplication
-	db.operationsBufferMutex.Lock()
-	for _, op := range ops {
-		key := bufferKey(op.Bucket, op.Key)
-		db.operationsBuffer[key] = op
-	}
-	db.bytesInBuffer += totalBytes
-	shouldFlush := db.bytesInBuffer >= uint64(db.config.MaxBufferBytes)
-	db.operationsBufferMutex.Unlock()
-
-	if shouldFlush {
-		select {
-		case db.flushChannel <- struct{}{}:
-		default:
-		}
-	}
 	return nil
 }

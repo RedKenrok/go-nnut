@@ -17,5 +17,5 @@ func (s *Store[T]) Has(ctx context.Context, key string) (bool, error) {
 	}
 
 	// Check primary key index
-	return s.btreeIndexes[primaryKeyIndexName].Search(key) != nil, nil
+	return s.indexes[primaryKeyIndexName].search(key) != nil, nil
 }

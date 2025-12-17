@@ -1,7 +1,6 @@
 package nnut
 
 import (
-	"fmt"
 	"slices"
 	"sort"
 	"sync"
@@ -9,323 +8,45 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-// BTreeNode represents a node in the B-tree index
-type BTreeNode struct {
-	Keys     []string     // sorted indexed values (strings)
-	Values   [][]string   // for each key, list of record keys
-	Children []*BTreeNode // child nodes (len = len(Keys)+1 for internal nodes)
-	IsLeaf   bool
-}
-
-// isFull returns true if the node has reached maximum capacity
-func (n *BTreeNode) isFull(t int) bool {
-	return len(n.Keys) >= 2*t-1
-}
-
-// splitChild splits a full child node
-func (n *BTreeNode) splitChild(aCount int, bCount int) {
-	aChildren := n.Children[bCount]
-	bChildren := &BTreeNode{
-		Keys:     make([]string, 0, 2*aCount-1),
-		Values:   make([][]string, 0, 2*aCount-1),
-		Children: make([]*BTreeNode, 0, 2*aCount),
-		IsLeaf:   aChildren.IsLeaf,
-	}
-
-	// Move t keys and values from y to z
-	mid := aCount - 1
-	bChildren.Keys = append(bChildren.Keys, aChildren.Keys[mid+1:]...)
-	bChildren.Values = append(bChildren.Values, aChildren.Values[mid+1:]...)
-
-	// Move children if not leaf
-	if !aChildren.IsLeaf {
-		bChildren.Children = append(bChildren.Children, aChildren.Children[mid+1:]...)
-		aChildren.Children = aChildren.Children[:mid+1]
-	}
-
-	// Move middle key to parent
-	n.Keys = slices.Insert(n.Keys, bCount, aChildren.Keys[mid])
-	n.Values = slices.Insert(n.Values, bCount, aChildren.Values[mid])
-
-	// Insert z as new child
-	n.Children = slices.Insert(n.Children, bCount+1, bChildren)
-
-	// Truncate y
-	aChildren.Keys = aChildren.Keys[:mid]
-	aChildren.Values = aChildren.Values[:mid]
-}
-
-// insertNonFull inserts a key-value pair into a non-full node
-func (n *BTreeNode) insertNonFull(t int, key string, value string) {
-	if len(n.Keys) != len(n.Values) {
-		panic(fmt.Sprintf("BTree invariant violated: len(Keys)=%d, len(Values)=%d", len(n.Keys), len(n.Values)))
-	}
-	if !n.IsLeaf && len(n.Children) != len(n.Keys)+1 {
-		panic(fmt.Sprintf("BTree invariant violated: leaf=%v, len(Keys)=%d, len(Children)=%d", n.IsLeaf, len(n.Keys), len(n.Children)))
-	}
-	i := sort.SearchStrings(n.Keys, key)
-
-	if n.IsLeaf {
-		if i < len(n.Keys) && n.Keys[i] == key {
-			// Key exists, append to existing list
-			n.Values[i] = append(n.Values[i], value)
-		} else {
-			// Insert new key
-			n.Keys = slices.Insert(n.Keys, i, key)
-			n.Values = slices.Insert(n.Values, i, []string{value})
-		}
-	} else {
-		// Descend to child
-		child := n.Children[i]
-		if child.isFull(t) {
-			n.splitChild(t, i)
-			if key > n.Keys[i] {
-				i++
-			}
-		}
-		n.Children[i].insertNonFull(t, key, value)
-	}
-}
-
-// BTree implements a B-tree for efficient indexing
-type BTree struct {
-	Root            *BTreeNode
+// bTree implements a B-tree for efficient indexing
+type bTree struct {
+	Root            *bTreeNode
 	BranchingFactor int // t, where max keys per node = 2t-1, min = t-1
-	mu              sync.RWMutex
+	mutex           sync.RWMutex
 	dirty           bool
 	version         uint64
 }
 
-// BTreeItem represents a key-value pair for bulk operations
-type BTreeItem struct {
+// bTreeItem represents a key-value pair for bulk operations
+type bTreeItem struct {
 	Key   string
 	Value string
-}
-
-// BTreeIterator provides efficient iteration over B-tree range queries
-type BTreeIterator struct {
-	tree          *BTree
-	min, max      string
-	includeMin    bool
-	includeMax    bool
-	path          []iteratorNode
-	currentValues []string
-	valueIndex    int
-	finished      bool
-}
-
-type iteratorNode struct {
-	node  *BTreeNode
-	index int
 }
 
 // persistedBTree represents the serialized format of a B-tree
 type persistedBTree struct {
 	Version   uint64     `msgpack:"version"`
 	Branching int        `msgpack:"branching"`
-	Root      *BTreeNode `msgpack:"root"`
+	Root      *bTreeNode `msgpack:"root"`
 }
 
-// NewBTreeIterator creates a new iterator for range queries
-func NewBTreeIterator(tree *BTree, min, max string, includeMin, includeMax bool) *BTreeIterator {
-	it := &BTreeIterator{
-		tree:       tree,
-		min:        min,
-		max:        max,
-		includeMin: includeMin,
-		includeMax: includeMax,
-		path:       make([]iteratorNode, 0),
-		finished:   false,
-	}
-	it.findStart()
-	it.advance()
-	return it
-}
-
-// findStart builds the path to the starting position for the range
-func (it *BTreeIterator) findStart() {
-	node := it.tree.Root
-	if node == nil {
-		it.finished = true
-		return
-	}
-	for !node.IsLeaf {
-		i := 0
-		if it.min != "" {
-			i = sort.SearchStrings(node.Keys, it.min)
-		}
-		it.path = append(it.path, iteratorNode{node: node, index: i})
-		node = node.Children[i]
-	}
-	// At leaf
-	startIndex := 0
-	if it.min != "" {
-		startIndex = sort.SearchStrings(node.Keys, it.min)
-	}
-	it.path = append(it.path, iteratorNode{node: node, index: startIndex})
-}
-
-// advance moves to the next valid key-value pair in the range
-func (it *BTreeIterator) advance() {
-	if it.finished {
-		return
-	}
-
-	for len(it.path) > 0 {
-		current := &it.path[len(it.path)-1]
-		node := current.node
-
-		if node.IsLeaf {
-			// Process keys in this leaf
-			for current.index < len(node.Keys) {
-				key := node.Keys[current.index]
-				if it.isKeyGreaterThanMax(key) {
-					it.finished = true
-					return
-				}
-				if it.isInRange(key) {
-					it.currentValues = node.Values[current.index]
-					it.valueIndex = 0
-					current.index++
-					return
-				}
-				current.index++
-			}
-			// Leaf exhausted, pop it
-			it.path = it.path[:len(it.path)-1]
-		} else {
-			// Internal node, move to next child
-			current.index++
-			if current.index < len(node.Children) {
-				// Check for subtree pruning
-				if it.isSubtreeLessThanMin(node, current.index) {
-					// Skip this subtree entirely
-					continue
-				}
-				if it.isSubtreeGreaterThanMax(node, current.index) {
-					// Entire remaining subtrees are > max, terminate
-					it.finished = true
-					return
-				}
-				// Descend to leftmost leaf of this child
-				child := node.Children[current.index]
-				for !child.IsLeaf {
-					it.path = append(it.path, iteratorNode{node: child, index: 0})
-					child = child.Children[0]
-				}
-				it.path = append(it.path, iteratorNode{node: child, index: 0})
-			} else {
-				// No more children, pop this node
-				it.path = it.path[:len(it.path)-1]
-			}
-		}
-	}
-
-	it.finished = true
-}
-
-// isInRange checks if a key is within the iterator's range bounds
-func (it *BTreeIterator) isInRange(key string) bool {
-	if it.min != "" {
-		if it.includeMin {
-			if key < it.min {
-				return false
-			}
-		} else {
-			if key <= it.min {
-				return false
-			}
-		}
-	}
-	if it.max != "" {
-		if it.includeMax {
-			if key > it.max {
-				return false
-			}
-		} else {
-			if key >= it.max {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// isKeyGreaterThanMax checks if a key exceeds the max bound for early termination
-func (it *BTreeIterator) isKeyGreaterThanMax(key string) bool {
-	if it.max == "" {
-		return false
-	}
-	if it.includeMax {
-		return key > it.max
-	}
-	return key >= it.max
-}
-
-// isSubtreeLessThanMin checks if an entire subtree is less than the min bound
-func (it *BTreeIterator) isSubtreeLessThanMin(node *BTreeNode, childIndex int) bool {
-	if it.min == "" {
-		return false
-	}
-	// For child i, max key in subtree is node.Keys[i] if i < len(Keys)
-	if childIndex >= len(node.Keys) {
-		return false // Last child, no upper bound
-	}
-	maxInSubtree := node.Keys[childIndex]
-	if it.includeMin {
-		return maxInSubtree < it.min
-	}
-	return maxInSubtree <= it.min
-}
-
-// isSubtreeGreaterThanMax checks if an entire subtree is greater than the max bound
-func (it *BTreeIterator) isSubtreeGreaterThanMax(node *BTreeNode, childIndex int) bool {
-	if it.max == "" {
-		return false
-	}
-	// For child i, min key in subtree is node.Keys[i-1] if i > 0
-	if childIndex == 0 {
-		return false // First child, no lower bound
-	}
-	minInSubtree := node.Keys[childIndex-1]
-	return it.isKeyGreaterThanMax(minInSubtree)
-}
-
-// HasNext returns true if there are more values to iterate
-func (it *BTreeIterator) HasNext() bool {
-	return !it.finished && it.valueIndex < len(it.currentValues)
-}
-
-// Next returns the next value in the iteration
-func (it *BTreeIterator) Next() string {
-	if !it.HasNext() {
-		return ""
-	}
-	value := it.currentValues[it.valueIndex]
-	it.valueIndex++
-	if it.valueIndex >= len(it.currentValues) {
-		it.advance()
-	}
-	return value
-}
-
-// NewBTreeIndex creates a new B-tree index with the given branching factor
-func NewBTreeIndex(branchingFactor int) *BTree {
+// newBTree creates a new B-tree index with the given branching factor
+func newBTree(branchingFactor int) *bTree {
 	if branchingFactor < 2 {
 		branchingFactor = 32 // default
 	}
-	return &BTree{
-		Root: &BTreeNode{
+	return &bTree{
+		Root: &bTreeNode{
 			Keys:     make([]string, 0),
 			Values:   make([][]string, 0),
-			Children: make([]*BTreeNode, 0),
+			Children: make([]*bTreeNode, 0),
 			IsLeaf:   true,
 		},
 		BranchingFactor: branchingFactor,
 	}
 }
 
-func (t *BTree) countKeys(node *BTreeNode) int {
+func (t *bTree) countKeysRecursive(node *bTreeNode) int {
 	if node == nil {
 		return 0
 	}
@@ -335,45 +56,30 @@ func (t *BTree) countKeys(node *BTreeNode) int {
 	}
 	if !node.IsLeaf {
 		for _, child := range node.Children {
-			count += t.countKeys(child)
+			count += t.countKeysRecursive(child)
 		}
 	}
 	return count
 }
 
-func (t *BTree) countUnique(node *BTreeNode) int {
+func (t *bTree) countUniqueRecursive(node *bTreeNode) int {
 	if node == nil {
 		return 0
 	}
 	count := len(node.Keys)
 	if !node.IsLeaf {
 		for _, child := range node.Children {
-			count += t.countUnique(child)
+			count += t.countUniqueRecursive(child)
 		}
 	}
 	return count
 }
 
-func (t *BTree) minKeys() int {
+func (t *bTree) minKeys() int {
 	return t.BranchingFactor - 1
 }
 
-func (n *BTreeNode) isUnderfilled(t int, isRoot bool) bool {
-	if isRoot && len(n.Children) == 0 {
-		return false // root can be empty
-	}
-	return len(n.Keys) < t-1
-}
-
-func (n *BTreeNode) removeKey(i int) {
-	n.Keys = slices.Delete(n.Keys, i, i+1)
-	n.Values = slices.Delete(n.Values, i, i+1)
-	if !n.IsLeaf {
-		n.Children = slices.Delete(n.Children, i+1, i+2)
-	}
-}
-
-func (t *BTree) borrowFromLeft(parent *BTreeNode, childIndex int) {
+func (t *bTree) borrowFromLeft(parent *bTreeNode, childIndex int) {
 	node := parent.Children[childIndex]
 	leftSibling := parent.Children[childIndex-1]
 
@@ -397,7 +103,7 @@ func (t *BTree) borrowFromLeft(parent *BTreeNode, childIndex int) {
 	}
 }
 
-func (t *BTree) borrowFromRight(parent *BTreeNode, childIndex int) {
+func (t *bTree) borrowFromRight(parent *bTreeNode, childIndex int) {
 	node := parent.Children[childIndex]
 	rightSibling := parent.Children[childIndex+1]
 
@@ -420,7 +126,7 @@ func (t *BTree) borrowFromRight(parent *BTreeNode, childIndex int) {
 	}
 }
 
-func (t *BTree) mergeWithLeft(parent *BTreeNode, childIndex int) {
+func (t *bTree) mergeWithLeft(parent *bTreeNode, childIndex int) {
 	node := parent.Children[childIndex]
 	leftSibling := parent.Children[childIndex-1]
 
@@ -445,7 +151,7 @@ func (t *BTree) mergeWithLeft(parent *BTreeNode, childIndex int) {
 	parent.Children = slices.Delete(parent.Children, childIndex, childIndex+1)
 }
 
-func (t *BTree) mergeWithRight(parent *BTreeNode, childIndex int) {
+func (t *bTree) mergeWithRight(parent *bTreeNode, childIndex int) {
 	node := parent.Children[childIndex]
 	rightSibling := parent.Children[childIndex+1]
 
@@ -470,7 +176,7 @@ func (t *BTree) mergeWithRight(parent *BTreeNode, childIndex int) {
 	parent.Children = slices.Delete(parent.Children, childIndex+1, childIndex+2)
 }
 
-func (t *BTree) rebalance(parent *BTreeNode, childIndex int) {
+func (t *bTree) rebalance(parent *bTreeNode, childIndex int) {
 	if parent == nil {
 		return // root
 	}
@@ -511,7 +217,7 @@ func (t *BTree) rebalance(parent *BTreeNode, childIndex int) {
 	}
 }
 
-func (t *BTree) findPredecessor(node *BTreeNode) (string, []string) {
+func (t *bTree) findPredecessor(node *bTreeNode) (string, []string) {
 	if node.IsLeaf {
 		last := len(node.Keys) - 1
 		return node.Keys[last], node.Values[last]
@@ -519,7 +225,7 @@ func (t *BTree) findPredecessor(node *BTreeNode) (string, []string) {
 	return t.findPredecessor(node.Children[len(node.Children)-1])
 }
 
-func (t *BTree) removeKeyFromSubtree(parent *BTreeNode, node *BTreeNode, index int, key string) {
+func (t *bTree) removeKeyFromSubtree(parent *bTreeNode, node *bTreeNode, index int, key string) {
 	i := sort.SearchStrings(node.Keys, key)
 	if i < len(node.Keys) && node.Keys[i] == key {
 		if node.IsLeaf {
@@ -540,7 +246,7 @@ func (t *BTree) removeKeyFromSubtree(parent *BTreeNode, node *BTreeNode, index i
 	}
 }
 
-func (t *BTree) delete(parent *BTreeNode, node *BTreeNode, index int, key string, value string) {
+func (t *bTree) deleteRecursive(parent *bTreeNode, node *bTreeNode, index int, key string, value string) {
 	i := sort.SearchStrings(node.Keys, key)
 	if i < len(node.Keys) && node.Keys[i] == key {
 		if node.IsLeaf {
@@ -567,28 +273,28 @@ func (t *BTree) delete(parent *BTreeNode, node *BTreeNode, index int, key string
 		return
 	}
 	if !node.IsLeaf {
-		t.delete(node, node.Children[i], i, key, value)
+		t.deleteRecursive(node, node.Children[i], i, key, value)
 	}
 	t.rebalance(parent, index)
 }
 
-func (t *BTree) getAllKeys(node *BTreeNode, result *[]string) {
+func (t *bTree) getAllKeysRecursive(node *bTreeNode, result *[]string) {
 	if node == nil {
 		return
 	}
 	i := 0
 	if !node.IsLeaf {
-		t.getAllKeys(node.Children[i], result)
+		t.getAllKeysRecursive(node.Children[i], result)
 	}
 	for ; i < len(node.Keys); i++ {
 		*result = append(*result, node.Values[i]...)
 		if !node.IsLeaf {
-			t.getAllKeys(node.Children[i+1], result)
+			t.getAllKeysRecursive(node.Children[i+1], result)
 		}
 	}
 }
 
-func (t *BTree) search(node *BTreeNode, key string) []string {
+func (t *bTree) searchRecursive(node *bTreeNode, key string) []string {
 	i := sort.SearchStrings(node.Keys, key)
 	if i < len(node.Keys) && node.Keys[i] == key {
 		return node.Values[i]
@@ -596,28 +302,28 @@ func (t *BTree) search(node *BTreeNode, key string) []string {
 	if node.IsLeaf {
 		return nil
 	}
-	return t.search(node.Children[i], key)
+	return t.searchRecursive(node.Children[i], key)
 }
 
-// CountKeys returns the total number of record keys in the B-tree
-func (t *BTree) CountKeys() int {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.countKeys(t.Root)
+// countKeys returns the total number of record keys in the B-tree
+func (t *bTree) countKeys() int {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	return t.countKeysRecursive(t.Root)
 }
 
-// CountUniqueValues returns the number of unique index values in the B-tree
-func (t *BTree) CountUniqueValues() int {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.countUnique(t.Root)
+// countUniqueValues returns the number of unique index values in the B-tree
+func (t *bTree) countUniqueValues() int {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	return t.countUniqueRecursive(t.Root)
 }
 
-// Delete removes a record key from the index under the given index value
-func (t *BTree) Delete(indexValue string, recordKey string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.delete(nil, t.Root, 0, indexValue, recordKey)
+// delete removes a record key from the index under the given index value
+func (t *bTree) delete(indexValue string, recordKey string) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	t.deleteRecursive(nil, t.Root, 0, indexValue, recordKey)
 	// If root has no keys and has children, make the child the new root
 	if len(t.Root.Keys) == 0 && len(t.Root.Children) == 1 {
 		t.Root = t.Root.Children[0]
@@ -626,26 +332,26 @@ func (t *BTree) Delete(indexValue string, recordKey string) {
 	t.version++
 }
 
-// GetAllKeys returns all record keys in order of index values
-func (t *BTree) GetAllKeys() []string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+// getAllKeys returns all record keys in order of index values
+func (t *bTree) getAllKeys() []string {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
 	var result []string
-	t.getAllKeys(t.Root, &result)
+	t.getAllKeysRecursive(t.Root, &result)
 	return result
 }
 
-// Insert adds a record key to the index under the given index value
-func (t *BTree) Insert(indexValue string, recordKey string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// insert adds a record key to the index under the given index value
+func (t *bTree) insert(indexValue string, recordKey string) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
 	root := t.Root
 	if root.isFull(t.BranchingFactor) {
 		// Split root
-		newRoot := &BTreeNode{
+		newRoot := &bTreeNode{
 			Keys:     make([]string, 0),
 			Values:   make([][]string, 0),
-			Children: []*BTreeNode{root},
+			Children: []*bTreeNode{root},
 			IsLeaf:   false,
 		}
 		newRoot.splitChild(t.BranchingFactor, 0)
@@ -656,22 +362,22 @@ func (t *BTree) Insert(indexValue string, recordKey string) {
 	t.version++
 }
 
-// RangeSearch finds all record keys for index values in the given range
-func (t *BTree) RangeSearch(min string, max string, includeMin bool, includeMax bool) []string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	it := NewBTreeIterator(t, min, max, includeMin, includeMax)
+// rangeSearch finds all record keys for index values in the given range
+func (t *bTree) rangeSearch(min string, max string, includeMin bool, includeMax bool) []string {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	it := newBTreeIterator(t, min, max, includeMin, includeMax)
 	var result []string
-	for it.HasNext() {
-		result = append(result, it.Next())
+	for it.hasNext() {
+		result = append(result, it.next())
 	}
 	return result
 }
 
-// BulkInsert inserts multiple key-value pairs efficiently
-func (t *BTree) BulkInsert(items []BTreeItem) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// bulkInsert inserts multiple key-value pairs efficiently
+func (t *bTree) bulkInsert(items []bTreeItem) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
 
 	// Sort items by key for optimal insertion order
 	sort.Slice(items, func(i, j int) bool {
@@ -682,10 +388,10 @@ func (t *BTree) BulkInsert(items []BTreeItem) {
 		root := t.Root
 		if root.isFull(t.BranchingFactor) {
 			// Split root
-			newRoot := &BTreeNode{
+			newRoot := &bTreeNode{
 				Keys:     make([]string, 0),
 				Values:   make([][]string, 0),
-				Children: []*BTreeNode{root},
+				Children: []*bTreeNode{root},
 				IsLeaf:   false,
 			}
 			newRoot.splitChild(t.BranchingFactor, 0)
@@ -697,10 +403,10 @@ func (t *BTree) BulkInsert(items []BTreeItem) {
 	t.version++
 }
 
-// BulkDelete deletes multiple key-value pairs efficiently
-func (t *BTree) BulkDelete(items []BTreeItem) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// bulkDelete deletes multiple key-value pairs efficiently
+func (t *bTree) bulkDelete(items []bTreeItem) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
 
 	// Sort items by key for optimal deletion order
 	sort.Slice(items, func(i, j int) bool {
@@ -708,7 +414,7 @@ func (t *BTree) BulkDelete(items []BTreeItem) {
 	})
 
 	for _, item := range items {
-		t.delete(nil, t.Root, 0, item.Key, item.Value)
+		t.deleteRecursive(nil, t.Root, 0, item.Key, item.Value)
 		// Handle root becoming empty
 		if len(t.Root.Keys) == 0 && len(t.Root.Children) == 1 {
 			t.Root = t.Root.Children[0]
@@ -718,29 +424,29 @@ func (t *BTree) BulkDelete(items []BTreeItem) {
 	t.version++
 }
 
-// BulkSearch performs multiple equality searches efficiently
-func (t *BTree) BulkSearch(keys []string) map[string][]string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+// bulkSearch performs multiple equality searches efficiently
+func (t *bTree) bulkSearch(keys []string) map[string][]string {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
 
 	result := make(map[string][]string, len(keys))
 	for _, key := range keys {
-		result[key] = t.search(t.Root, key)
+		result[key] = t.searchRecursive(t.Root, key)
 	}
 	return result
 }
 
-// Search finds all record keys for a given index value
-func (t *BTree) Search(indexValue string) []string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.search(t.Root, indexValue)
+// search finds all record keys for a given index value
+func (t *bTree) search(indexValue string) []string {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	return t.searchRecursive(t.Root, indexValue)
 }
 
-// Serialize encodes the B-tree to msgpack bytes with versioning
-func (t *BTree) Serialize() ([]byte, error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+// serialize encodes the B-tree to msgpack bytes with versioning
+func (t *bTree) serialize() ([]byte, error) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
 
 	pb := persistedBTree{
 		Version:   t.version,
@@ -757,14 +463,14 @@ func (t *BTree) Serialize() ([]byte, error) {
 }
 
 // Deserialize decodes the B-tree from msgpack bytes
-func deserializeBTree(data []byte) (*BTree, error) {
+func deserializeBTree(data []byte) (*bTree, error) {
 	var pb persistedBTree
 	err := msgpack.Unmarshal(data, &pb)
 	if err != nil {
 		return nil, err
 	}
 
-	t := &BTree{
+	t := &bTree{
 		Root:            pb.Root,
 		BranchingFactor: pb.Branching,
 		version:         pb.Version,

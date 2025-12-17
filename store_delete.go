@@ -9,7 +9,7 @@ import (
 // Delete removes a single record by its key.
 func (s *Store[T]) Delete(ctx context.Context, key string) error {
 	// Check primary key index first for fast rejection
-	if s.btreeIndexes[primaryKeyIndexName].Search(key) == nil {
+	if s.indexes[primaryKeyIndexName].search(key) == nil {
 		return nil
 	}
 
@@ -24,13 +24,13 @@ func (s *Store[T]) Delete(ctx context.Context, key string) error {
 	}
 
 	// Update primary key index
-	s.btreeIndexes[primaryKeyIndexName].Delete(key, key)
+	s.indexes[primaryKeyIndexName].delete(key, key)
 
 	// Update B-tree indexes
 	for name := range s.indexFields {
 		oldValue := oldIndexValues[name]
 		if oldValue != "" {
-			s.btreeIndexes[name].Delete(oldValue, key)
+			s.indexes[name].delete(oldValue, key)
 		}
 	}
 
@@ -48,19 +48,15 @@ func (s *Store[T]) Delete(ctx context.Context, key string) error {
 		Bucket: s.bucket,
 		Key:    key,
 		Value:  nil,
-		Type:   OpDelete,
+		Type:   OperationDelete,
 	}
 
 	for i, indexName := range modifiedIndexes {
-		indexData, err := s.btreeIndexes[indexName].Serialize()
-		if err != nil {
-			return WrappedError{Operation: "serialize_index", Bucket: string(s.bucket), Key: indexName, Err: err}
-		}
 		ops[i+1] = operation{
 			Bucket: []byte(btreeBucketName),
-			Key:    buildBTreeKey(string(s.bucket), indexName),
-			Value:  indexData,
-			Type:   OpIndexDirty,
+			Key:    buildBTreeKey(string(s.bucket)+":", indexName),
+			Value:  nil, // Serialized on flush
+			Type:   OperationIndex,
 		}
 	}
 
@@ -73,12 +69,12 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 	s.database.Logger().Debugf("Deleting batch of %d records from bucket %s", len(keys), s.bucket)
 
 	// Collect all index operations for batching
-	indexDeletes := make(map[string][]BTreeItem)
+	indexDeletes := make(map[string][]bTreeItem)
 
 	// Collect keys that exist in primary index
 	var candidateKeys []string
 	for _, key := range keys {
-		if s.btreeIndexes[primaryKeyIndexName].Search(key) != nil {
+		if s.indexes[primaryKeyIndexName].search(key) != nil {
 			candidateKeys = append(candidateKeys, key)
 		}
 	}
@@ -96,13 +92,13 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 			oldIndexValues := s.extractIndexValues(oldVal)
 
 			// Update primary key index
-			s.btreeIndexes[primaryKeyIndexName].Delete(key, key)
+			s.indexes[primaryKeyIndexName].delete(key, key)
 
 			// Collect B-tree index operations for batching
 			for name := range s.indexFields {
 				oldIdxVal := oldIndexValues[name]
 				if oldIdxVal != "" {
-					indexDeletes[name] = append(indexDeletes[name], BTreeItem{Key: oldIdxVal, Value: key})
+					indexDeletes[name] = append(indexDeletes[name], bTreeItem{Key: oldIdxVal, Value: key})
 				}
 			}
 		}
@@ -111,13 +107,30 @@ func (s *Store[T]) DeleteBatch(ctx context.Context, keys []string) error {
 			Bucket: s.bucket,
 			Key:    key,
 			Value:  nil,
-			Type:   OpDelete,
+			Type:   OperationDelete,
 		})
 	}
 
 	// Apply batched index operations
 	for name, items := range indexDeletes {
-		s.btreeIndexes[name].BulkDelete(items)
+		s.indexes[name].bulkDelete(items)
+	}
+
+	// Collect modified indexes for buffering
+	modifiedIndexes := make(map[string]bool)
+	modifiedIndexes[primaryKeyIndexName] = true // Primary key is always modified
+	for name := range indexDeletes {
+		modifiedIndexes[name] = true
+	}
+
+	// Create index operations
+	for indexName := range modifiedIndexes {
+		operations = append(operations, operation{
+			Bucket: []byte(btreeBucketName),
+			Key:    buildBTreeKey(string(s.bucket)+":", indexName),
+			Value:  nil, // Serialized on flush
+			Type:   OperationIndex,
+		})
 	}
 
 	return s.database.writeOperations(ctx, operations)
@@ -137,7 +150,7 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 		return 0, ctx.Err()
 	default:
 	}
-	err := s.database.View(func(tx *bbolt.Tx) error {
+	err := s.database.View(func(transaction *bbolt.Tx) error {
 		// Determine the maximum number of keys needed based on limit and offset
 		maxKeys := 0
 		if query.Limit > 0 {
@@ -147,13 +160,13 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 		// Gather keys that potentially match the query conditions
 		var candidateKeys []string
 		if len(query.Conditions) > 0 {
-			candidateKeys = s.getCandidateKeysTx(tx, query.Conditions, maxKeys)
+			candidateKeys = s.getCandidateKeysTx(transaction, query.Conditions, maxKeys)
 		} else if query.Index != "" {
 			// When no conditions but sorting is required, use the index directly
-			candidateKeys = s.getKeysFromIndexTx(tx, query.Index, query.Sort, maxKeys)
+			candidateKeys = s.getKeysFromIndexTx(transaction, query.Index, query.Sort, maxKeys)
 		} else {
 			// Fallback to scanning all keys when no optimizations apply
-			candidateKeys = s.getAllKeysTx(tx, maxKeys)
+			candidateKeys = s.getAllKeysTx(transaction, maxKeys)
 		}
 
 		// Skip offset and take only limit number of keys
@@ -180,7 +193,7 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 	}
 
 	// Collect all index operations for batching
-	indexDeletes := make(map[string][]BTreeItem)
+	indexDeletes := make(map[string][]bTreeItem)
 
 	// Build operations and update indexes
 	var operations []operation
@@ -189,13 +202,13 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 			oldIndexValues := s.extractIndexValues(oldVal)
 
 			// Update primary key index
-			s.btreeIndexes[primaryKeyIndexName].Delete(key, key)
+			s.indexes[primaryKeyIndexName].delete(key, key)
 
 			// Collect B-tree index operations for batching
 			for name := range s.indexFields {
 				oldIdxVal := oldIndexValues[name]
 				if oldIdxVal != "" {
-					indexDeletes[name] = append(indexDeletes[name], BTreeItem{Key: oldIdxVal, Value: key})
+					indexDeletes[name] = append(indexDeletes[name], bTreeItem{Key: oldIdxVal, Value: key})
 				}
 			}
 		}
@@ -204,21 +217,36 @@ func (s *Store[T]) DeleteQuery(ctx context.Context, query *Query) (int, error) {
 			Bucket: s.bucket,
 			Key:    key,
 			Value:  nil,
-			Type:   OpDelete,
+			Type:   OperationDelete,
 		})
 	}
 
 	// Apply batched index operations
 	for name, items := range indexDeletes {
-		s.btreeIndexes[name].BulkDelete(items)
+		s.indexes[name].bulkDelete(items)
+	}
+
+	// Collect modified indexes for buffering
+	modifiedIndexes := make(map[string]bool)
+	modifiedIndexes[primaryKeyIndexName] = true // Primary key is always modified
+	for name := range indexDeletes {
+		modifiedIndexes[name] = true
+	}
+
+	// Create index operations
+	for indexName := range modifiedIndexes {
+		operations = append(operations, operation{
+			Bucket: []byte(btreeBucketName),
+			Key:    buildBTreeKey(string(s.bucket)+":", indexName),
+			Value:  nil, // Serialized on flush
+			Type:   OperationIndex,
+		})
 	}
 
 	err = s.database.writeOperations(ctx, operations)
 	if err != nil {
 		return 0, err
 	}
-
-	s.database.Flush()
 
 	return len(keysToDelete), nil
 }

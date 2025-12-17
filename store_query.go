@@ -103,40 +103,40 @@ func (s *Store[T]) validateQuery(query *Query) error {
 	return nil
 }
 
-// getCandidateKeys returns keys that match all conditions
-func (s *Store[T]) getCandidateKeys(conditions []Condition, maxKeys int) []string {
-	var keys []string
-	s.database.View(func(tx *bbolt.Tx) error {
-		keys = s.getCandidateKeysTx(tx, conditions, maxKeys)
-		return nil
-	})
-	return keys
-}
+// // getCandidateKeys returns keys that match all conditions
+// func (s *Store[T]) getCandidateKeys(conditions []Condition, maxKeys int) []string {
+// 	var keys []string
+// 	s.database.View(func(transaction *bbolt.Tx) error {
+// 		keys = s.getCandidateKeysTx(transaction, conditions, maxKeys)
+// 		return nil
+// 	})
+// 	return keys
+// }
 
-// getKeysFromIndex returns all keys sorted by the index
-func (s *Store[T]) getKeysFromIndex(index string, sorting Sorting, maxKeys int) []string {
-	var keys []string
-	s.database.View(func(tx *bbolt.Tx) error {
-		keys = s.getKeysFromIndexTx(tx, index, sorting, maxKeys)
-		return nil
-	})
-	return keys
-}
+// // getKeysFromIndex returns all keys sorted by the index
+// func (s *Store[T]) getKeysFromIndex(index string, sorting Sorting, maxKeys int) []string {
+// 	var keys []string
+// 	s.database.View(func(transaction *bbolt.Tx) error {
+// 		keys = s.getKeysFromIndexTx(transaction, index, sorting, maxKeys)
+// 		return nil
+// 	})
+// 	return keys
+// }
 
-// getAllKeys returns all keys in the store
-func (s *Store[T]) getAllKeys(maxKeys int) []string {
-	var keys []string
-	s.database.View(func(tx *bbolt.Tx) error {
-		keys = s.getAllKeysTx(tx, maxKeys)
-		return nil
-	})
-	return keys
-}
+// // getAllKeys returns all keys in the store
+// func (s *Store[T]) getAllKeys(maxKeys int) []string {
+// 	var keys []string
+// 	s.database.View(func(transaction *bbolt.Tx) error {
+// 		keys = s.getAllKeysTx(transaction, maxKeys)
+// 		return nil
+// 	})
+// 	return keys
+// }
 
 // getCandidateKeysTx returns keys that match all conditions using the provided tx
-func (s *Store[T]) getCandidateKeysTx(tx *bbolt.Tx, conditions []Condition, maxKeys int) []string {
+func (s *Store[T]) getCandidateKeysTx(transaction *bbolt.Tx, conditions []Condition, maxKeys int) []string {
 	if len(conditions) == 0 {
-		return s.getAllKeysTx(tx, maxKeys)
+		return s.getAllKeysTx(transaction, maxKeys)
 	}
 
 	// Partition conditions to leverage indexes where possible
@@ -159,7 +159,7 @@ func (s *Store[T]) getCandidateKeysTx(tx *bbolt.Tx, conditions []Condition, maxK
 	if len(indexedConditions) > 0 {
 		var conditionSizes []condWithSize
 		for _, condition := range indexedConditions {
-			size := s.countKeysForConditionTx(tx, condition, maxKeys)
+			size := s.countKeysForConditionTx(transaction, condition, maxKeys)
 			conditionSizes = append(conditionSizes, condWithSize{condition, size})
 		}
 		// Sort by size ascending
@@ -172,10 +172,10 @@ func (s *Store[T]) getCandidateKeysTx(tx *bbolt.Tx, conditions []Condition, maxK
 		if len(indexedConditions) == 1 && len(nonIndexedConditions) == 0 {
 			keysMax = maxKeys
 		}
-		indexedKeys = s.getKeysForConditionTx(tx, primaryCondition, keysMax)
+		indexedKeys = s.getKeysForConditionTx(transaction, primaryCondition, keysMax)
 		// Intersect others into primary
 		for index := 1; index < len(conditionSizes); index++ {
-			otherConditionKeys := s.getKeysForConditionTx(tx, conditionSizes[index].cond, 0)
+			otherConditionKeys := s.getKeysForConditionTx(transaction, conditionSizes[index].cond, 0)
 			indexedKeys = intersectSlices(indexedKeys, otherConditionKeys)
 		}
 	}
@@ -188,7 +188,7 @@ func (s *Store[T]) getCandidateKeysTx(tx *bbolt.Tx, conditions []Condition, maxK
 		if len(indexedConditions) > 0 {
 			candidates = indexedKeys
 		}
-		nonIndexedKeys = s.scanForConditionsTx(tx, nonIndexedConditions, candidates, maxKeys)
+		nonIndexedKeys = s.scanForConditionsTx(transaction, nonIndexedConditions, candidates, maxKeys)
 	}
 
 	// Intersect with non-indexed
@@ -213,7 +213,7 @@ func (s *Store[T]) getCandidateKeysTx(tx *bbolt.Tx, conditions []Condition, maxK
 }
 
 // getKeysForConditionTx returns keys that match the condition, sorted
-func (s *Store[T]) getKeysForConditionTx(tx *bbolt.Tx, condition Condition, maxKeys int) []string {
+func (s *Store[T]) getKeysForConditionTx(transaction *bbolt.Tx, condition Condition, maxKeys int) []string {
 	var keys []string
 	_, indexed := s.indexFields[condition.Field]
 	valueString, isString := condition.Value.(string)
@@ -227,7 +227,7 @@ func (s *Store[T]) getKeysForConditionTx(tx *bbolt.Tx, condition Condition, maxK
 	var includeMin, includeMax bool
 	switch condition.Operator {
 	case Equals:
-		btreeKeys := s.btreeIndexes[condition.Field].Search(valueString)
+		btreeKeys := s.indexes[condition.Field].search(valueString)
 		for _, key := range btreeKeys {
 			if maxKeys > 0 && len(keys) >= maxKeys {
 				break
@@ -257,7 +257,7 @@ func (s *Store[T]) getKeysForConditionTx(tx *bbolt.Tx, condition Condition, maxK
 		includeMax = true
 	}
 
-	btreeKeys := s.btreeIndexes[condition.Field].RangeSearch(min, max, includeMin, includeMax)
+	btreeKeys := s.indexes[condition.Field].rangeSearch(min, max, includeMin, includeMax)
 	for _, key := range btreeKeys {
 		if maxKeys > 0 && len(keys) >= maxKeys {
 			break
@@ -268,7 +268,7 @@ func (s *Store[T]) getKeysForConditionTx(tx *bbolt.Tx, condition Condition, maxK
 }
 
 // countKeysForConditionTx returns the count of keys matching the condition
-func (s *Store[T]) countKeysForConditionTx(tx *bbolt.Tx, condition Condition, maxKeys int) int {
+func (s *Store[T]) countKeysForConditionTx(transaction *bbolt.Tx, condition Condition, maxKeys int) int {
 	var count int
 	_, indexed := s.indexFields[condition.Field]
 	valueString, isString := condition.Value.(string)
@@ -277,7 +277,7 @@ func (s *Store[T]) countKeysForConditionTx(tx *bbolt.Tx, condition Condition, ma
 	}
 
 	indexBucketName := string(s.bucket) + "_index_" + condition.Field
-	indexBucket := tx.Bucket([]byte(indexBucketName))
+	indexBucket := transaction.Bucket([]byte(indexBucketName))
 	if indexBucket == nil {
 		return 0
 	}
@@ -406,9 +406,9 @@ func compare(a, b interface{}) int {
 }
 
 // getAllKeysTx returns all keys in the bucket, sorted, up to maxKeys if >0
-func (s *Store[T]) getAllKeysTx(tx *bbolt.Tx, maxKeys int) []string {
+func (s *Store[T]) getAllKeysTx(transaction *bbolt.Tx, maxKeys int) []string {
 	var keys []string
-	bucket := tx.Bucket(s.bucket)
+	bucket := transaction.Bucket(s.bucket)
 	if bucket == nil {
 		// Bucket not found, return empty
 		return keys
@@ -425,8 +425,8 @@ func (s *Store[T]) getAllKeysTx(tx *bbolt.Tx, maxKeys int) []string {
 }
 
 // getKeysFromIndexTx returns all keys sorted by the index
-func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sorting, maxKeys int) []string {
-	keys := s.btreeIndexes[index].GetAllKeys()
+func (s *Store[T]) getKeysFromIndexTx(transaction *bbolt.Tx, index string, sorting Sorting, maxKeys int) []string {
+	keys := s.indexes[index].getAllKeys()
 	if sorting == Descending {
 		// Reverse the slice
 		for i, j := 0, len(keys)-1; i < j; i, j = i+1, j-1 {
@@ -442,9 +442,9 @@ func (s *Store[T]) getKeysFromIndexTx(tx *bbolt.Tx, index string, sorting Sortin
 // scanForConditionsTx scans records and returns keys matching all conditions
 // If candidates is not nil, only scans those keys; otherwise scans all.
 // Limits to maxKeys if >0.
-func (s *Store[T]) scanForConditionsTx(tx *bbolt.Tx, conditions []Condition, candidates []string, maxKeys int) []string {
+func (s *Store[T]) scanForConditionsTx(transaction *bbolt.Tx, conditions []Condition, candidates []string, maxKeys int) []string {
 	var keys []string
-	bucket := tx.Bucket(s.bucket)
+	bucket := transaction.Bucket(s.bucket)
 	if bucket == nil {
 		// Bucket not found, return empty
 		return keys

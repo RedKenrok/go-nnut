@@ -36,10 +36,10 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 	if oldValue, err := s.Get(ctx, key); err == nil {
 		oldKey := reflect.ValueOf(oldValue).Field(s.keyField).String()
 		if oldKey != key {
-			s.btreeIndexes[primaryKeyIndexName].Delete(oldKey, oldKey)
+			s.indexes[primaryKeyIndexName].delete(oldKey, oldKey)
 		}
 	}
-	s.btreeIndexes[primaryKeyIndexName].Insert(key, key)
+	s.indexes[primaryKeyIndexName].insert(key, key)
 
 	// Update B-tree indexes
 	for name := range s.indexFields {
@@ -47,10 +47,10 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 		newValue := newIndexValues[name]
 		if oldValue != newValue {
 			if oldValue != "" {
-				s.btreeIndexes[name].Delete(oldValue, key)
+				s.indexes[name].delete(oldValue, key)
 			}
 			if newValue != "" {
-				s.btreeIndexes[name].Insert(newValue, key)
+				s.indexes[name].insert(newValue, key)
 			}
 		}
 	}
@@ -77,19 +77,15 @@ func (s *Store[T]) Put(ctx context.Context, value T) error {
 		Bucket: s.bucket,
 		Key:    key,
 		Value:  data,
-		Type:   OpPut,
+		Type:   OperationPut,
 	}
 
 	for i, indexName := range modifiedIndexes {
-		indexData, err := s.btreeIndexes[indexName].Serialize()
-		if err != nil {
-			return WrappedError{Operation: "serialize_index", Bucket: string(s.bucket), Key: indexName, Err: err}
-		}
 		ops[i+1] = operation{
 			Bucket: []byte(btreeBucketName),
-			Key:    buildBTreeKey(string(s.bucket), indexName),
-			Value:  indexData,
-			Type:   OpIndexDirty,
+			Key:    buildBTreeKey(string(s.bucket)+":", indexName),
+			Value:  nil, // Serialized on flush
+			Type:   OperationIndex,
 		}
 	}
 
@@ -121,8 +117,8 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 	}
 
 	// Collect all index operations for batching
-	indexInserts := make(map[string][]BTreeItem)
-	indexDeletes := make(map[string][]BTreeItem)
+	indexInserts := make(map[string][]bTreeItem)
+	indexDeletes := make(map[string][]bTreeItem)
 
 	// Build operations for each record
 	var operations []operation
@@ -142,10 +138,10 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 		if oldValue, exists := oldValues[key]; exists {
 			oldKey := reflect.ValueOf(oldValue).Field(s.keyField).String()
 			if oldKey != key {
-				s.btreeIndexes[primaryKeyIndexName].Delete(oldKey, oldKey)
+				s.indexes[primaryKeyIndexName].delete(oldKey, oldKey)
 			}
 		}
-		s.btreeIndexes[primaryKeyIndexName].Insert(key, key)
+		s.indexes[primaryKeyIndexName].insert(key, key)
 
 		// Collect B-tree index operations for batching
 		for name := range s.indexFields {
@@ -153,10 +149,10 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 			newVal := newIndexValues[name]
 			if oldVal != newVal {
 				if oldVal != "" {
-					indexDeletes[name] = append(indexDeletes[name], BTreeItem{Key: oldVal, Value: key})
+					indexDeletes[name] = append(indexDeletes[name], bTreeItem{Key: oldVal, Value: key})
 				}
 				if newVal != "" {
-					indexInserts[name] = append(indexInserts[name], BTreeItem{Key: newVal, Value: key})
+					indexInserts[name] = append(indexInserts[name], bTreeItem{Key: newVal, Value: key})
 				}
 			}
 		}
@@ -177,7 +173,7 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 			Bucket: s.bucket,
 			Key:    key,
 			Value:  data,
-			Type:   OpPut,
+			Type:   OperationPut,
 		}
 		operations = append(operations, operation)
 		bufferPool.Put(buf)
@@ -185,10 +181,30 @@ func (s *Store[T]) PutBatch(ctx context.Context, values []T) error {
 
 	// Apply batched index operations
 	for name, items := range indexDeletes {
-		s.btreeIndexes[name].BulkDelete(items)
+		s.indexes[name].bulkDelete(items)
 	}
 	for name, items := range indexInserts {
-		s.btreeIndexes[name].BulkInsert(items)
+		s.indexes[name].bulkInsert(items)
+	}
+
+	// Collect modified indexes for buffering
+	modifiedIndexes := make(map[string]bool)
+	modifiedIndexes[primaryKeyIndexName] = true // Primary key is always modified
+	for name := range indexInserts {
+		modifiedIndexes[name] = true
+	}
+	for name := range indexDeletes {
+		modifiedIndexes[name] = true
+	}
+
+	// Create index operations
+	for indexName := range modifiedIndexes {
+		operations = append(operations, operation{
+			Bucket: []byte(btreeBucketName),
+			Key:    buildBTreeKey(string(s.bucket)+":", indexName),
+			Value:  nil, // Serialized on flush
+			Type:   OperationIndex,
+		})
 	}
 
 	return s.database.writeOperations(ctx, operations)

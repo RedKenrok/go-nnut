@@ -42,12 +42,12 @@ func buildBTreeKey(bucketPrefix, fieldName string) string {
 // Store represents a typed bucket for storing and retrieving values of type T.
 // It provides type-safe operations with automatic indexing and serialization.
 type Store[T any] struct {
-	database     *DB
-	bucket       []byte
-	keyField     int               // index of the field tagged with nnut:"key"
-	indexFields  map[string]int    // field name -> field index
-	fieldMap     map[string]int    // field name -> field index
-	btreeIndexes map[string]*BTree // field name -> B-tree index (includes primary key as "__primary_key")
+	database    *DB
+	bucket      []byte
+	keyField    int               // index of the field tagged with nnut:"key"
+	indexFields map[string]int    // field name -> field index
+	fieldMap    map[string]int    // field name -> field index
+	indexes     map[string]*bTree // field name -> B-tree index (includes primary key as "__primary_key")
 }
 
 // NewStore creates a new store for type T with the given bucket name.
@@ -104,19 +104,28 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 		_ = fieldName // avoid unused variable
 	}
 
-	btreeIndexes := make(map[string]*BTree)
+	btreeIndexes := make(map[string]*bTree)
 	for fieldName := range indexFields {
-		btreeIndexes[fieldName] = NewBTreeIndex(32) // default branching factor
+		btreeIndexes[fieldName] = newBTree(32) // default branching factor
 	}
-	btreeIndexes[primaryKeyIndexName] = NewBTreeIndex(32) // primary key index
+	btreeIndexes[primaryKeyIndexName] = newBTree(32) // primary key index
 
 	store := &Store[T]{
-		database:     database,
-		bucket:       []byte(bucketName),
-		keyField:     keyFieldIndex,
-		indexFields:  indexFields,
-		fieldMap:     fieldMap,
-		btreeIndexes: btreeIndexes,
+		database:    database,
+		bucket:      []byte(bucketName),
+		keyField:    keyFieldIndex,
+		indexFields: indexFields,
+		fieldMap:    fieldMap,
+		indexes:     btreeIndexes,
+	}
+
+	// Register indexes with DB for serialization on flush
+	bucketPrefix := bucketName + ":"
+	for indexName, btree := range btreeIndexes {
+		indexKey := buildBTreeKey(bucketPrefix, indexName)
+		database.indexesMutex.Lock()
+		database.indexes[indexKey] = btree
+		database.indexesMutex.Unlock()
 	}
 
 	// Load persisted B-tree indexes
@@ -125,7 +134,6 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 	}
 
 	// Rebuild indexes if marked as dirty during WAL replay
-	bucketPrefix := bucketName + ":"
 	needsRebuild := false
 	for indexKey := range database.indexesNeedRebuild {
 		if strings.HasPrefix(indexKey, bucketPrefix) {
@@ -150,9 +158,9 @@ func NewStore[T any](database *DB, bucketName string) (*Store[T], error) {
 
 // loadBTreeIndexes loads persisted B-tree indexes from storage
 func (s *Store[T]) loadBTreeIndexes() error {
-	return s.database.View(func(tx *bolt.Tx) error {
+	return s.database.View(func(transaction *bolt.Tx) error {
 		// Load from dedicated btree bucket
-		bucket := tx.Bucket([]byte(btreeBucketName))
+		bucket := transaction.Bucket([]byte(btreeBucketName))
 		// Pre-compute bucket prefix for key construction
 		bucketPrefix := string(s.bucket) + ":"
 
@@ -164,15 +172,15 @@ func (s *Store[T]) loadBTreeIndexes() error {
 		}
 		if primaryData == nil {
 			// No persisted index, rebuild from database
-			s.rebuildPrimaryKeyIndex(tx)
+			s.rebuildPrimaryKeyIndex(transaction)
 		} else {
 			btree, err := deserializeBTree(primaryData)
 			if err == nil {
-				s.btreeIndexes[primaryKeyIndexName] = btree
+				s.indexes[primaryKeyIndexName] = btree
 			} else {
 				s.database.Logger().Warningf("Failed to load persisted primary key B-tree: %v", err)
 				// Rebuild index from database
-				s.rebuildPrimaryKeyIndex(tx)
+				s.rebuildPrimaryKeyIndex(transaction)
 			}
 		}
 
@@ -185,16 +193,16 @@ func (s *Store[T]) loadBTreeIndexes() error {
 			}
 			if secondaryData == nil {
 				// No persisted index, rebuild from database
-				s.rebuildSecondaryIndex(fieldName, tx)
+				s.rebuildSecondaryIndex(fieldName, transaction)
 			} else {
 				btree, err := deserializeBTree(secondaryData)
 				if err == nil {
-					s.btreeIndexes[fieldName] = btree
+					s.indexes[fieldName] = btree
 				} else {
 					// Log error but continue
 					s.database.Logger().Warningf("Failed to load persisted B-tree for field %s: %v", fieldName, err)
 					// Rebuild index from database
-					s.rebuildSecondaryIndex(fieldName, tx)
+					s.rebuildSecondaryIndex(fieldName, transaction)
 				}
 			}
 		}
@@ -216,8 +224,8 @@ func (s *Store[T]) extractIndexValues(value T) map[string]string {
 }
 
 // rebuildPrimaryKeyIndex rebuilds the primary key index from the database bucket
-func (s *Store[T]) rebuildPrimaryKeyIndex(tx *bolt.Tx) {
-	bucket := tx.Bucket(s.bucket)
+func (s *Store[T]) rebuildPrimaryKeyIndex(transaction *bolt.Tx) {
+	bucket := transaction.Bucket(s.bucket)
 	if bucket == nil {
 		return
 	}
@@ -227,21 +235,21 @@ func (s *Store[T]) rebuildPrimaryKeyIndex(tx *bolt.Tx) {
 			continue
 		}
 		key := string(k)
-		s.btreeIndexes[primaryKeyIndexName].Insert(key, key)
+		s.indexes[primaryKeyIndexName].insert(key, key)
 	}
 }
 
 // rebuildIndexes rebuilds all B-tree indexes from the current database state
 func (s *Store[T]) rebuildIndexes() error {
-	return s.database.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
+	return s.database.View(func(transaction *bolt.Tx) error {
+		bucket := transaction.Bucket(s.bucket)
 		if bucket == nil {
 			return nil
 		}
 
 		// Clear existing indexes
-		for name := range s.btreeIndexes {
-			s.btreeIndexes[name] = NewBTreeIndex(32)
+		for name := range s.indexes {
+			s.indexes[name] = newBTree(32)
 		}
 
 		cursor := bucket.Cursor()
@@ -263,7 +271,7 @@ func (s *Store[T]) rebuildIndexes() error {
 			key := string(k)
 
 			// Rebuild primary key index
-			s.btreeIndexes[primaryKeyIndexName].Insert(key, key)
+			s.indexes[primaryKeyIndexName].insert(key, key)
 
 			// Rebuild secondary indexes
 			structValue := reflect.ValueOf(item)
@@ -272,7 +280,7 @@ func (s *Store[T]) rebuildIndexes() error {
 				if fieldValue.Kind() == reflect.String {
 					indexValue := fieldValue.String()
 					if indexValue != "" {
-						s.btreeIndexes[fieldName].Insert(indexValue, key)
+						s.indexes[fieldName].insert(indexValue, key)
 					}
 				}
 			}
@@ -282,8 +290,8 @@ func (s *Store[T]) rebuildIndexes() error {
 }
 
 // rebuildSecondaryIndex rebuilds a secondary index for the given field from the database bucket
-func (s *Store[T]) rebuildSecondaryIndex(fieldName string, tx *bolt.Tx) {
-	bucket := tx.Bucket(s.bucket)
+func (s *Store[T]) rebuildSecondaryIndex(fieldName string, transaction *bolt.Tx) {
+	bucket := transaction.Bucket(s.bucket)
 	if bucket == nil {
 		return
 	}
@@ -312,7 +320,7 @@ func (s *Store[T]) rebuildSecondaryIndex(fieldName string, tx *bolt.Tx) {
 			indexValue := fieldValue.String()
 			if indexValue != "" {
 				key := string(k)
-				s.btreeIndexes[fieldName].Insert(indexValue, key)
+				s.indexes[fieldName].insert(indexValue, key)
 			}
 		}
 	}

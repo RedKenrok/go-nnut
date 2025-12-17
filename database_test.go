@@ -59,14 +59,14 @@ func TestOpen(t *testing.T) {
 func TestOperationTypeEnum(t *testing.T) {
 	t.Parallel()
 	// Test that OperationType constants are defined correctly
-	if OpPut != 0 {
-		t.Errorf("Expected OpPut = 0, got %d", OpPut)
+	if OperationPut != 0 {
+		t.Errorf("Expected OpPut = 0, got %d", OperationPut)
 	}
-	if OpDelete != 1 {
-		t.Errorf("Expected OpDelete = 1, got %d", OpDelete)
+	if OperationDelete != 1 {
+		t.Errorf("Expected OpDelete = 1, got %d", OperationDelete)
 	}
-	if OpIndexDirty != 2 {
-		t.Errorf("Expected OpIndexDirty = 2, got %d", OpIndexDirty)
+	if OperationIndex != 2 {
+		t.Errorf("Expected OpIndexDirty = 2, got %d", OperationIndex)
 	}
 }
 
@@ -93,11 +93,11 @@ func TestIndexBufferingAndPersistence(t *testing.T) {
 		t.Fatalf("Failed to put: %v", err)
 	}
 
-	// Check that operationsBuffer contains index operations with data
+	// Check that operationsBuffer contains index operations (data serialized on flush)
 	db.operationsBufferMutex.Lock()
 	foundIndexOp := false
 	for _, op := range db.operationsBuffer {
-		if op.Type == OpIndexDirty && len(op.Value) > 0 {
+		if op.Type == OperationIndex {
 			foundIndexOp = true
 			break
 		}
@@ -105,19 +105,19 @@ func TestIndexBufferingAndPersistence(t *testing.T) {
 	db.operationsBufferMutex.Unlock()
 
 	if !foundIndexOp {
-		t.Fatal("Expected to find index operation with data in operationsBuffer")
+		t.Fatal("Expected to find index operation in operationsBuffer")
 	}
 
 	// Flush and verify index is persisted
 	db.Flush()
 
 	// Check that index data exists in DB
-	err = db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("__btree_indexes"))
+	err = db.View(func(transaction *bolt.Tx) error {
+		bucket := transaction.Bucket([]byte("__btree_indexes"))
 		if bucket == nil {
 			t.Fatal("Expected __btree_indexes bucket to exist")
 		}
-		key := buildBTreeKey("users", "__primary_key")
+		key := buildBTreeKey("users:", "__primary_key")
 		data := bucket.Get([]byte(key))
 		if len(data) == 0 {
 			t.Fatal("Expected index data to be persisted")
@@ -170,7 +170,7 @@ func TestWALIndexMarkerSerialization(t *testing.T) {
 			t.Fatalf("Failed to decode WAL entry: %v", err)
 		}
 
-		if entry.Operation.Type == OpIndexDirty {
+		if entry.Operation.Type == OperationIndex {
 			if len(entry.Operation.Value) != 0 {
 				t.Fatal("Expected OpIndexDirty in WAL to have empty Value")
 			}

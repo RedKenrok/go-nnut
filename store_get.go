@@ -20,17 +20,17 @@ func (s *Store[T]) Get(ctx context.Context, key string) (T, error) {
 	var result T
 
 	// Check primary key index first for fast rejection
-	if s.btreeIndexes[primaryKeyIndexName].Search(key) == nil {
+	if s.indexes[primaryKeyIndexName].search(key) == nil {
 		return result, KeyNotFoundError{Bucket: string(s.bucket), Key: key}
 	}
 
 	// Check buffer for pending changes first
-	if op, exists := s.database.getLatestBufferedOperation(s.bucket, key); exists {
-		if op.Type == OpPut {
+	if operation, exists := s.database.getLatestBufferedOperation(s.bucket, key); exists {
+		if operation.Type == OperationPut {
 			// Apply buffered put operation
 			decoder := msgpack.GetDecoder()
 			defer msgpack.PutDecoder(decoder)
-			decoder.Reset(bytes.NewReader(op.Value))
+			decoder.Reset(bytes.NewReader(operation.Value))
 			err := decoder.Decode(&result)
 			if err != nil {
 				s.database.Logger().Errorf("Failed to decode buffered value for key %s in bucket %s: %v", key, s.bucket, err)
@@ -50,8 +50,8 @@ func (s *Store[T]) Get(ctx context.Context, key string) (T, error) {
 		return zero, ctx.Err()
 	default:
 	}
-	err := s.database.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
+	err := s.database.View(func(transaction *bbolt.Tx) error {
+		bucket := transaction.Bucket(s.bucket)
 		if bucket == nil {
 			return BucketNotFoundError{Bucket: string(s.bucket)}
 		}
@@ -89,7 +89,7 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 	// Filter keys that exist in primary key index for fast rejection
 	var existingKeys []string
 	for _, key := range keys {
-		if s.btreeIndexes[primaryKeyIndexName].Search(key) != nil {
+		if s.indexes[primaryKeyIndexName].search(key) != nil {
 			existingKeys = append(existingKeys, key)
 		}
 	}
@@ -98,10 +98,10 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 	bufferDecoder := msgpack.GetDecoder()
 	defer msgpack.PutDecoder(bufferDecoder)
 	for _, key := range existingKeys {
-		if op, exists := s.database.getLatestBufferedOperation(s.bucket, key); exists {
-			if op.Type == OpPut {
+		if operation, exists := s.database.getLatestBufferedOperation(s.bucket, key); exists {
+			if operation.Type == OperationPut {
 				var item T
-				bufferDecoder.Reset(bytes.NewReader(op.Value))
+				bufferDecoder.Reset(bytes.NewReader(operation.Value))
 				err := bufferDecoder.Decode(&item)
 				if err != nil {
 					s.database.Logger().Errorf("Failed to decode buffered value for key %s in bucket %s: %v", key, s.bucket, err)
@@ -121,8 +121,8 @@ func (s *Store[T]) GetBatch(ctx context.Context, keys []string) (map[string]T, e
 		return nil, ctx.Err()
 	default:
 	}
-	err := s.database.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
+	err := s.database.View(func(transaction *bbolt.Tx) error {
+		bucket := transaction.Bucket(s.bucket)
 		if bucket == nil {
 			// Missing bucket indicates no data exists - return empty results
 			return nil
@@ -173,13 +173,14 @@ func (s *Store[T]) GetQuery(ctx context.Context, query *Query) ([]T, error) {
 		return nil, err
 	}
 
-	var results []T
+	// TODO: Turn into slice.
+	var results map[string]T = make(map[string]T)
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
-	err := s.database.View(func(tx *bbolt.Tx) error {
+	err := s.database.View(func(transaction *bbolt.Tx) error {
 		// Determine the maximum number of keys needed based on limit and offset
 		maxKeys := 0
 		if query.Limit > 0 {
@@ -189,13 +190,13 @@ func (s *Store[T]) GetQuery(ctx context.Context, query *Query) ([]T, error) {
 		// Gather keys that potentially match the query conditions
 		var candidateKeys []string
 		if len(query.Conditions) > 0 {
-			candidateKeys = s.getCandidateKeysTx(tx, query.Conditions, maxKeys)
+			candidateKeys = s.getCandidateKeysTx(transaction, query.Conditions, maxKeys)
 		} else if query.Index != "" {
 			// When no conditions but sorting is required, use the index directly
-			candidateKeys = s.getKeysFromIndexTx(tx, query.Index, query.Sort, maxKeys)
+			candidateKeys = s.getKeysFromIndexTx(transaction, query.Index, query.Sort, maxKeys)
 		} else {
 			// Fallback to scanning all keys when no optimizations apply
-			candidateKeys = s.getAllKeysTx(tx, maxKeys)
+			candidateKeys = s.getAllKeysTx(transaction, maxKeys)
 		}
 
 		// Skip offset and take only limit number of keys
@@ -210,7 +211,7 @@ func (s *Store[T]) GetQuery(ctx context.Context, query *Query) ([]T, error) {
 		keysToFetch := candidateKeys[start:end]
 
 		// Retrieve the actual data for the selected keys
-		bucket := tx.Bucket(s.bucket)
+		bucket := transaction.Bucket(s.bucket)
 		if bucket == nil {
 			return BucketNotFoundError{Bucket: string(s.bucket)}
 		}
@@ -227,7 +228,8 @@ func (s *Store[T]) GetQuery(ctx context.Context, query *Query) ([]T, error) {
 			if err != nil {
 				continue
 			}
-			results = append(results, item)
+			results[key] = item
+			// TODO: Look for puts in the buffer here.
 		}
 		return nil
 	})
@@ -235,10 +237,34 @@ func (s *Store[T]) GetQuery(ctx context.Context, query *Query) ([]T, error) {
 		return nil, err
 	}
 
-	// Apply sorting if the index wasn't used for ordering
-	if query.Index != "" && len(query.Conditions) > 0 {
-		s.sortResults(results, query.Index, query.Sort)
+	// TODO: Only insert new items from the buffer to the slice at the right location based on the sort.
+	// Apply buffered operations
+	bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
+	for _, operation := range bufferedOperations {
+		if operation.Type == OperationPut {
+			var item T
+			decoder := msgpack.GetDecoder()
+			decoder.Reset(bytes.NewReader(operation.Value))
+			err := decoder.Decode(&item)
+			msgpack.PutDecoder(decoder)
+			if err == nil {
+				results[operation.Key] = item
+			}
+		} else if operation.Type == OperationDelete {
+			delete(results, operation.Key)
+		}
 	}
 
-	return results, nil
+	// Convert to slice
+	var finalResults []T
+	for _, item := range results {
+		finalResults = append(finalResults, item)
+	}
+
+	// Apply sorting if the index wasn't used for ordering
+	if query.Index != "" && len(query.Conditions) > 0 {
+		s.sortResults(finalResults, query.Index, query.Sort)
+	}
+
+	return finalResults, nil
 }

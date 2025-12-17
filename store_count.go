@@ -15,14 +15,14 @@ func (s *Store[T]) Count(ctx context.Context) (int, error) {
 		return 0, ctx.Err()
 	default:
 	}
-	err := s.database.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
+	err := s.database.View(func(transaction *bbolt.Tx) error {
+		bucket := transaction.Bucket(s.bucket)
 		if bucket == nil {
 			count = 0
 			return nil
 		}
 		// Primary key index is always up to date with buffered operations
-		count = s.btreeIndexes[primaryKeyIndexName].CountKeys()
+		count = s.indexes[primaryKeyIndexName].countKeys()
 		return nil
 	})
 	return count, err
@@ -42,8 +42,8 @@ func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 		return 0, ctx.Err()
 	default:
 	}
-	err := s.database.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
+	err := s.database.View(func(transaction *bbolt.Tx) error {
+		bucket := transaction.Bucket(s.bucket)
 		if bucket == nil {
 			count = 0
 			return nil
@@ -51,7 +51,7 @@ func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 
 		// Collect candidate keys from conditions
 		if len(query.Conditions) > 0 {
-			candidateKeys := s.getCandidateKeysTx(tx, query.Conditions, 0)
+			candidateKeys := s.getCandidateKeysTx(transaction, query.Conditions, 0)
 			count = len(candidateKeys)
 
 			// Apply buffered operations to get accurate count
@@ -59,7 +59,7 @@ func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 			// We only need to handle Delete operations that remove keys from results
 			bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
 			for _, operation := range bufferedOperations {
-				if operation.Type == OpDelete {
+				if operation.Type == OperationDelete {
 					// For Delete operations, check if the key was in our candidates
 					for _, candidateKey := range candidateKeys {
 						if operation.Key == candidateKey {
@@ -74,15 +74,15 @@ func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 			// No conditions, but index, count from index
 			// Note: B-tree indexes are updated immediately for buffered operations,
 			// so CountKeys() already reflects buffered Puts
-			count = s.btreeIndexes[query.Index].CountKeys()
+			count = s.indexes[query.Index].countKeys()
 
 			// Apply buffered operations to get accurate count
 			// We only need to handle Delete operations that remove keys from the index
 			bufferedOperations := s.database.getBufferedOperationsForBucket(s.bucket)
 			for _, operation := range bufferedOperations {
-				if operation.Type == OpDelete {
+				if operation.Type == OperationDelete {
 					// For Delete operations, check if the key exists in the index
-					if s.btreeIndexes[query.Index].Search(operation.Key) != nil {
+					if s.indexes[query.Index].search(operation.Key) != nil {
 						count-- // Existing key being deleted from index
 					}
 				}
@@ -92,7 +92,7 @@ func (s *Store[T]) CountQuery(ctx context.Context, query *Query) (int, error) {
 
 		// No conditions, no index, count all keys
 		// Primary key index is always up to date with buffered operations
-		count = s.btreeIndexes[primaryKeyIndexName].CountKeys()
+		count = s.indexes[primaryKeyIndexName].countKeys()
 		return nil
 	})
 	return count, err
